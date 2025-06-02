@@ -6,6 +6,10 @@ __pycache__/
 # C extensions
 *.so
 
+# Secrets - CRITICAL: Never commit your secrets file!
+secrets.toml
+.streamlit/secrets.toml
+
 # Distribution / packaging
 .Python
 build/
