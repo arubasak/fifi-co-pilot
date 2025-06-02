@@ -1,5 +1,4 @@
 streamlit
 pinecone-client
-pinecone-plugins[assistant] # If you are using the assistant plugin features
-fpdf2 # For PDF generation
-# Add any other direct dependencies your fifi.py script uses
+pinecone-plugins
+fpdf2
