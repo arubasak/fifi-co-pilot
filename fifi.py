@@ -51,7 +51,7 @@ def initialize_pinecone_assistant():
 
 assistant = initialize_pinecone_assistant()
 
-# --- PDF Generation Function (Corrected output encoding) ---
+# --- PDF Generation Function (Ensuring 'bytes' type for output) ---
 def generate_pdf_from_chat(chat_messages):
     pdf = FPDF()
     pdf.add_page()
@@ -140,9 +140,16 @@ def generate_pdf_from_chat(chat_messages):
 
         pdf.ln(line_height / 2)
 
-    # pdf.output() with dest='S' returns bytes (or bytearray which is fine for download_button)
-    return pdf.output(dest='S')
-
+    # Ensure the output is explicitly 'bytes' type for st.download_button
+    output_data = pdf.output(dest='S')
+    if isinstance(output_data, bytearray):
+        return bytes(output_data)
+    # If it's already bytes (common in Py3), or str (common in Py2 for dest='S'),
+    # we still need to ensure it's bytes for st.download_button.
+    # For Py3, if it's str, it would mean an issue with dest='S' behavior or an unexpected string return.
+    # For safety, if it's string, we'd ideally encode it, but dest='S' should give bytes in Py3.
+    # Assuming fpdf.output(dest='S') returns bytes or bytearray in Python 3.
+    return output_data # Should be bytes now
 
 # --- Initialize session state ---
 if "messages" not in st.session_state:
@@ -233,15 +240,13 @@ if st.session_state.messages:
         pdf_data = generate_pdf_from_chat(st.session_state.messages)
         st.sidebar.download_button(
             label="📄 Download Chat (PDF)",
-            data=pdf_data, # This is now directly bytes (or bytearray)
+            data=pdf_data, # This is now explicitly bytes
             file_name=f"fifi_chat_{current_time}.pdf",
             mime="application/pdf",
             use_container_width=True
         )
     except Exception as e:
         st.sidebar.error(f"PDF generation failed: {e}")
-        # print(f"PDF Error: {e}") # For server-side debug
-        # traceback.print_exc()  # For server-side debug
 
 if st.sidebar.button("🧹 Clear Chat History", use_container_width=True):
     st.session_state.messages = []
