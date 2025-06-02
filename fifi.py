@@ -21,7 +21,7 @@ except Exception as e:
 # --- Theme Configuration ---
 st.set_page_config(
     page_title="FiFi Co-Pilot",
-    page_icon="", # Using an emoji for the icon
+    page_icon="🍊", # Using an emoji for the icon
     layout="wide"
 )
 # For .streamlit/config.toml theming:
@@ -39,36 +39,19 @@ def initialize_pinecone_assistant():
         st.error("Pinecone API Key is not available. Cannot initialize assistant.")
         return None
     try:
-        # Initialize the base Pinecone client
-        # The region parameter might be necessary here depending on your Pinecone setup
-        # and if your project/index is not in the default region.
-        pc = Pinecone(api_key=API_KEY) # pc_region=REGION or environment=REGION might be needed
-
-        # Get the assistant object using the plugins SDK
-        # The pc.assistant.Assistant call might also take a region or environment parameter
-        # if the assistant is in a specific region.
-        assistant_instance = pc.assistant.Assistant(assistant_name=ASSISTANT_NAME) # pc_region=REGION or environment=REGION
-        
-        # Optional: A quick check to see if the assistant can be described (confirms it exists)
-        # This might make initialization slower.
-        # try:
-        #     pc.assistant.describe_assistant(assistant_name=ASSISTANT_NAME)
-        # except PineconeApiException as desc_e:
-        #     st.error(f"Could not describe assistant '{ASSISTANT_NAME}': {desc_e}")
-        #     return None
-            
+        pc = Pinecone(api_key=API_KEY)
+        assistant_instance = pc.assistant.Assistant(assistant_name=ASSISTANT_NAME)
         return assistant_instance
     except PineconeApiException as e:
         st.error(f"Pinecone API Error during initialization: {e}. Ensure '{ASSISTANT_NAME}' exists and API key/region are correct.")
         return None
     except Exception as e:
         st.error(f"An unexpected error occurred during assistant initialization: {e}")
-        # traceback.print_exc() # For server-side debugging during development
         return None
 
 assistant = initialize_pinecone_assistant()
 
-# --- PDF Generation Function (Further Refined for Width Issues) ---
+# --- PDF Generation Function (Corrected output encoding) ---
 def generate_pdf_from_chat(chat_messages):
     pdf = FPDF()
     pdf.add_page()
@@ -86,26 +69,26 @@ def generate_pdf_from_chat(chat_messages):
     pdf.ln(5)
 
     pdf.set_text_color(0, 0, 0) # Black text for messages
-    line_height = 6 # Slightly more space for readability
+    line_height = 6
 
     for message in chat_messages:
         role = str(message.get("role", "Unknown")).capitalize()
         content = str(message.get("content", ""))
 
-        pdf.set_font("Arial", 'B', 10) # Bold for role
+        pdf.set_font("Arial", 'B', 10)
         try:
             pdf.multi_cell(effective_cell_width, line_height, f"{role}:", 0, 'L', False)
-        except RuntimeError as e: # Catching specific fpdf2 error
+        except RuntimeError as e:
             if "Not enough horizontal space" in str(e):
                 pdf.multi_cell(effective_cell_width, line_height, f"{role}: [Role text too long for cell]", 0, 'L', False)
             else:
-                raise # Re-raise other RuntimeErrors
-        except Exception as e_gen: # Catch other general errors
+                raise
+        except Exception as e_gen:
              pdf.multi_cell(effective_cell_width, line_height, f"{role}: [Error rendering role: {e_gen}]", 0, 'L', False)
 
-
-        pdf.set_font("Arial", '', 10) # Regular for content
+        pdf.set_font("Arial", '', 10)
         try:
+            # FPDF with standard fonts expects latin-1. We encode Python strings to latin-1.
             encoded_content = content.encode('latin-1', 'replace').decode('latin-1')
         except Exception:
             encoded_content = "[Content has characters not supported by PDF font encoding]"
@@ -116,12 +99,10 @@ def generate_pdf_from_chat(chat_messages):
             if "Not enough horizontal space" in str(e):
                 placeholder_msg = "[Message content too wide/complex to fully render in PDF. See TXT export or try shorter lines.]"
                 pdf.multi_cell(effective_cell_width, line_height, placeholder_msg, 0, 'L', False)
-                # Attempt to render what we can, by breaking long words manually (very basic)
                 words = encoded_content.split(' ')
                 lines_to_print_individually = []
                 current_line_buffer = ""
                 for word_idx, word in enumerate(words):
-                    # Check if word itself is too long
                     if pdf.get_string_width(word) > effective_cell_width:
                         sub_word_parts = []
                         temp_sub_word = ""
@@ -129,34 +110,29 @@ def generate_pdf_from_chat(chat_messages):
                             if pdf.get_string_width(temp_sub_word + char_in_word) > effective_cell_width:
                                 if temp_sub_word: sub_word_parts.append(temp_sub_word)
                                 temp_sub_word = char_in_word
-                                if char_idx == len(word) - 1: # If last char made it break and is the end
+                                if char_idx == len(word) - 1:
                                     sub_word_parts.append(temp_sub_word)
                             else:
                                 temp_sub_word += char_in_word
-                                if char_idx == len(word) - 1: # If it's the last char and fits
+                                if char_idx == len(word) - 1:
                                     sub_word_parts.append(temp_sub_word)
-                        
                         if current_line_buffer: lines_to_print_individually.append(current_line_buffer.strip())
                         lines_to_print_individually.extend(sub_word_parts)
                         current_line_buffer = ""
                         continue
-
-                    # If word fits on current line
                     test_line = current_line_buffer + (" " + word if current_line_buffer else word)
                     if pdf.get_string_width(test_line.strip()) <= effective_cell_width:
                         current_line_buffer = test_line
-                    else: # Word doesn't fit, start new line
+                    else:
                         if current_line_buffer: lines_to_print_individually.append(current_line_buffer.strip())
                         current_line_buffer = word
-                
-                if current_line_buffer: # Add last buffered line
+                if current_line_buffer:
                     lines_to_print_individually.append(current_line_buffer.strip())
-
                 for line_part in lines_to_print_individually:
                     try:
-                        if line_part: # Avoid printing empty lines
+                        if line_part:
                             pdf.multi_cell(effective_cell_width, line_height, line_part, 0, 'L', False)
-                    except: pass # If even a broken part fails, skip it
+                    except: pass
             else: 
                 raise
         except Exception as e_gen:
@@ -164,7 +140,9 @@ def generate_pdf_from_chat(chat_messages):
 
         pdf.ln(line_height / 2)
 
-    return pdf.output(dest='S').encode('latin-1')
+    # pdf.output() with dest='S' returns bytes (or bytearray which is fine for download_button)
+    return pdf.output(dest='S')
+
 
 # --- Initialize session state ---
 if "messages" not in st.session_state:
@@ -180,7 +158,6 @@ def handle_user_query(user_query: str):
 
     st.session_state.messages.append({"role": "user", "content": user_query})
 
-    # Ensure messages are in the format expected by pinecone_plugins.assistant
     sdk_messages = []
     conversion_error_message = None
     try:
@@ -195,36 +172,30 @@ def handle_user_query(user_query: str):
     else:
         try:
             with st.spinner("FiFi is thinking..."):
-                # Using the assistant object from pinecone_plugins
-                response_from_sdk = assistant.chat(messages=sdk_messages, model="gpt-4o") # Assuming model is passed here
+                response_from_sdk = assistant.chat(messages=sdk_messages, model="gpt-4o")
             
-            # Response structure for pinecone_plugins.assistant
-            if isinstance(response_from_sdk, dict): # Common if it returns a dict with a 'message' key
+            if isinstance(response_from_sdk, dict):
                 message_data = response_from_sdk.get("message")
                 if isinstance(message_data, dict):
                     assistant_reply_content = message_data.get("content", "")
-                elif hasattr(message_data, 'content'): # If message_data is an object with a content attribute
+                elif hasattr(message_data, 'content'):
                     assistant_reply_content = message_data.content
-            elif hasattr(response_from_sdk, 'message') and hasattr(response_from_sdk.message, 'content'): # If response itself has message.content
+            elif hasattr(response_from_sdk, 'message') and hasattr(response_from_sdk.message, 'content'):
                  assistant_reply_content = response_from_sdk.message.content
-            elif hasattr(response_from_sdk, 'content'): # If response itself is an object with .content (like a Message object)
+            elif hasattr(response_from_sdk, 'content'):
                 assistant_reply_content = response_from_sdk.content
             
             if not assistant_reply_content:
                  assistant_reply_content = "(FiFi returned an empty or unreadable reply.)"
-
-        except PineconeApiException as e: # Specific exception from the plugin
+        except PineconeApiException as e:
             assistant_reply_content = f"Sorry, a Pinecone API error occurred: {e}"
         except Exception as e:
             assistant_reply_content = f"Sorry, an unexpected error occurred while FiFi was thinking: {e}"
-            # For server-side logs during development if needed:
-            # print(f"Error during assistant.chat(): {e}")
-            # traceback.print_exc()
             
     st.session_state.messages.append({"role": "assistant", "content": assistant_reply_content})
 
 # --- Streamlit App UI ---
-st.title("1-2-Taste FiFi Co-Pilot") # Added emoji to title
+st.title("🍊 1-2-Taste FiFi Co-Pilot")
 
 if not assistant:
     st.warning("FiFi Co-Pilot is currently unavailable. This may be due to configuration issues or service downtime.")
@@ -245,7 +216,7 @@ else:
 
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
-        st.markdown(str(message.get("content",""))) # Ensure content is displayable
+        st.markdown(str(message.get("content","")))
 
 st.sidebar.markdown("---")
 if st.session_state.messages:
@@ -262,16 +233,15 @@ if st.session_state.messages:
         pdf_data = generate_pdf_from_chat(st.session_state.messages)
         st.sidebar.download_button(
             label="📄 Download Chat (PDF)",
-            data=pdf_data,
+            data=pdf_data, # This is now directly bytes (or bytearray)
             file_name=f"fifi_chat_{current_time}.pdf",
             mime="application/pdf",
             use_container_width=True
         )
     except Exception as e:
         st.sidebar.error(f"PDF generation failed: {e}")
-        # For server-side logs during development:
-        # print(f"PDF Error: {e}")
-        # traceback.print_exc()
+        # print(f"PDF Error: {e}") # For server-side debug
+        # traceback.print_exc()  # For server-side debug
 
 if st.sidebar.button("🧹 Clear Chat History", use_container_width=True):
     st.session_state.messages = []
