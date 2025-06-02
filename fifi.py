@@ -4,7 +4,7 @@ from pinecone_plugins.assistant.models.chat import Message
 from pinecone_plugins.assistant.control.core.client.exceptions import PineconeApiException
 import traceback # Kept for potential local debugging if needed
 import datetime
-from fpdf import FPDF
+# from fpdf import FPDF # Removed FPDF import
 
 # --- Configuration from Streamlit Secrets ---
 try:
@@ -21,7 +21,7 @@ except Exception as e:
 # --- Theme Configuration ---
 st.set_page_config(
     page_title="FiFi Co-Pilot",
-    page_icon="🍊", # Using an emoji for the icon
+    page_icon="", # Using an emoji for the icon
     layout="wide"
 )
 # For .streamlit/config.toml theming:
@@ -51,105 +51,9 @@ def initialize_pinecone_assistant():
 
 assistant = initialize_pinecone_assistant()
 
-# --- PDF Generation Function (Ensuring 'bytes' type for output) ---
-def generate_pdf_from_chat(chat_messages):
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.set_auto_page_break(auto=True, margin=15)
-
-    page_width = pdf.w
-    left_margin = pdf.l_margin
-    right_margin = pdf.r_margin
-    effective_cell_width = page_width - left_margin - right_margin
-
-    pdf.set_font("Arial", 'B', 12) # Title font
-    pdf.set_fill_color(243, 112, 33) # 1-2-Taste Orange
-    pdf.set_text_color(255, 255, 255) # White text
-    pdf.cell(effective_cell_width, 10, "FiFi Co-Pilot Chat Transcript", 1, 1, 'C', True)
-    pdf.ln(5)
-
-    pdf.set_text_color(0, 0, 0) # Black text for messages
-    line_height = 6
-
-    for message in chat_messages:
-        role = str(message.get("role", "Unknown")).capitalize()
-        content = str(message.get("content", ""))
-
-        pdf.set_font("Arial", 'B', 10)
-        try:
-            pdf.multi_cell(effective_cell_width, line_height, f"{role}:", 0, 'L', False)
-        except RuntimeError as e:
-            if "Not enough horizontal space" in str(e):
-                pdf.multi_cell(effective_cell_width, line_height, f"{role}: [Role text too long for cell]", 0, 'L', False)
-            else:
-                raise
-        except Exception as e_gen:
-             pdf.multi_cell(effective_cell_width, line_height, f"{role}: [Error rendering role: {e_gen}]", 0, 'L', False)
-
-        pdf.set_font("Arial", '', 10)
-        try:
-            # FPDF with standard fonts expects latin-1. We encode Python strings to latin-1.
-            encoded_content = content.encode('latin-1', 'replace').decode('latin-1')
-        except Exception:
-            encoded_content = "[Content has characters not supported by PDF font encoding]"
-        
-        try:
-            pdf.multi_cell(effective_cell_width, line_height, encoded_content, 0, 'L', False)
-        except RuntimeError as e:
-            if "Not enough horizontal space" in str(e):
-                placeholder_msg = "[Message content too wide/complex to fully render in PDF. See TXT export or try shorter lines.]"
-                pdf.multi_cell(effective_cell_width, line_height, placeholder_msg, 0, 'L', False)
-                words = encoded_content.split(' ')
-                lines_to_print_individually = []
-                current_line_buffer = ""
-                for word_idx, word in enumerate(words):
-                    if pdf.get_string_width(word) > effective_cell_width:
-                        sub_word_parts = []
-                        temp_sub_word = ""
-                        for char_idx, char_in_word in enumerate(word):
-                            if pdf.get_string_width(temp_sub_word + char_in_word) > effective_cell_width:
-                                if temp_sub_word: sub_word_parts.append(temp_sub_word)
-                                temp_sub_word = char_in_word
-                                if char_idx == len(word) - 1:
-                                    sub_word_parts.append(temp_sub_word)
-                            else:
-                                temp_sub_word += char_in_word
-                                if char_idx == len(word) - 1:
-                                    sub_word_parts.append(temp_sub_word)
-                        if current_line_buffer: lines_to_print_individually.append(current_line_buffer.strip())
-                        lines_to_print_individually.extend(sub_word_parts)
-                        current_line_buffer = ""
-                        continue
-                    test_line = current_line_buffer + (" " + word if current_line_buffer else word)
-                    if pdf.get_string_width(test_line.strip()) <= effective_cell_width:
-                        current_line_buffer = test_line
-                    else:
-                        if current_line_buffer: lines_to_print_individually.append(current_line_buffer.strip())
-                        current_line_buffer = word
-                if current_line_buffer:
-                    lines_to_print_individually.append(current_line_buffer.strip())
-                for line_part in lines_to_print_individually:
-                    try:
-                        if line_part:
-                            pdf.multi_cell(effective_cell_width, line_height, line_part, 0, 'L', False)
-                    except: pass
-            else: 
-                raise
-        except Exception as e_gen:
-             pdf.multi_cell(effective_cell_width, line_height, f"[Error rendering content: {e_gen}]", 0, 'L', False)
-
-        pdf.ln(line_height / 2)
-
-    # Ensure the output is explicitly 'bytes' type for st.download_button
-    output_data = pdf.output(dest='S')
-    if isinstance(output_data, bytearray):
-        return bytes(output_data)
-    # If it's already bytes (common in Py3), or str (common in Py2 for dest='S'),
-    # we still need to ensure it's bytes for st.download_button.
-    # For Py3, if it's str, it would mean an issue with dest='S' behavior or an unexpected string return.
-    # For safety, if it's string, we'd ideally encode it, but dest='S' should give bytes in Py3.
-    # Assuming fpdf.output(dest='S') returns bytes or bytearray in Python 3.
-    return output_data # Should be bytes now
+# --- PDF Generation Function (REMOVED) ---
+# def generate_pdf_from_chat(chat_messages):
+#     ... (function content removed) ...
 
 # --- Initialize session state ---
 if "messages" not in st.session_state:
@@ -202,7 +106,7 @@ def handle_user_query(user_query: str):
     st.session_state.messages.append({"role": "assistant", "content": assistant_reply_content})
 
 # --- Streamlit App UI ---
-st.title("🍊 1-2-Taste FiFi Co-Pilot")
+st.title("1-2-Taste FiFi Co-Pilot")
 
 if not assistant:
     st.warning("FiFi Co-Pilot is currently unavailable. This may be due to configuration issues or service downtime.")
@@ -236,17 +140,18 @@ if st.session_state.messages:
         mime="text/plain",
         use_container_width=True
     )
-    try:
-        pdf_data = generate_pdf_from_chat(st.session_state.messages)
-        st.sidebar.download_button(
-            label="📄 Download Chat (PDF)",
-            data=pdf_data, # This is now explicitly bytes
-            file_name=f"fifi_chat_{current_time}.pdf",
-            mime="application/pdf",
-            use_container_width=True
-        )
-    except Exception as e:
-        st.sidebar.error(f"PDF generation failed: {e}")
+    # --- PDF Download Button and Logic REMOVED ---
+    # try:
+    #     pdf_data = generate_pdf_from_chat(st.session_state.messages)
+    #     st.sidebar.download_button(
+    #         label="📄 Download Chat (PDF)",
+    #         data=pdf_data, 
+    #         file_name=f"fifi_chat_{current_time}.pdf",
+    #         mime="application/pdf",
+    #         use_container_width=True
+    #     )
+    # except Exception as e:
+    #     st.sidebar.error(f"PDF generation failed: {e}")
 
 if st.sidebar.button("🧹 Clear Chat History", use_container_width=True):
     st.session_state.messages = []
