@@ -23,7 +23,7 @@ except Exception as e: # Catch other potential issues with st.secrets if it's no
 # --- Theme Configuration ---
 st.set_page_config(
     page_title="FiFi Co-Pilot",
-    page_icon="🍊",
+    page_icon="",
     layout="wide"
 )
 # For .streamlit/config.toml theming:
@@ -134,7 +134,7 @@ def handle_user_query(user_query: str):
     st.session_state.messages.append({"role": "assistant", "content": assistant_reply_content})
 
 # --- Streamlit App UI ---
-st.title("🍊 1-2-Taste FiFi Co-Pilot")
+st.title("1-2-Taste FiFi Co-Pilot")
 
 if not assistant:
     st.warning("FiFi Co-Pilot is currently unavailable. This may be due to configuration issues or service downtime.")
