@@ -9,7 +9,7 @@ import datetime
 # --- Configuration from Streamlit Secrets ---
 try:
     API_KEY = st.secrets["PINECONE_API_KEY"]
-    ASSISTANT_NAME = st.secrets.get("PINECONE_ASSISTANT_NAME", "fifi")
+    ASSISTANT_NAME = st.secrets.get("PINECONE_ASSISTANT_NAME", "fifiv1")
     REGION = st.secrets.get("PINECONE_REGION", "us") # This might be used by Pinecone() or Assistant()
 except KeyError as e:
     st.error(f"Missing critical secret: {e}. Please ensure this secret is configured in your Streamlit Cloud app settings or local secrets.toml.")
