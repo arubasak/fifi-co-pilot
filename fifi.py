@@ -83,7 +83,7 @@ def handle_user_query(user_query: str):
     else:
         try:
             with st.spinner("FiFi is thinking..."):
-                response_from_sdk = assistant.chat(messages=sdk_messages, model="gpt-4.1")
+                response_from_sdk = assistant.chat(messages=sdk_messages, model="gpt-4.0")
             
             if isinstance(response_from_sdk, dict):
                 message_data = response_from_sdk.get("message")
