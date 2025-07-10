@@ -97,7 +97,8 @@ class TavilyFallbackAgent:
     def query(self, message: str, chat_history: List[BaseMessage]) -> Dict[str, Any]:
         try:
             response = self.agent_executor.invoke({"input": message, "chat_history": chat_history})
-            return {"content": response["output"], "success": True, "source": "tavily_fallback"}
+            # --- CHANGE 1: Set the source to the new branded name ---
+            return {"content": response["output"], "success": True, "source": "FiFi Web Search"}
         except Exception as e:
             return {"content": f"I apologize, but an error occurred: {e}", "success": False, "source": "error"}
 
@@ -114,10 +115,6 @@ class ChatApp:
             self.tavily_agent = TavilyFallbackAgent(openai_api_key, tavily_api_key)
 
     def _should_use_web_fallback(self, fifi_response_content: str) -> bool:
-        """
-        Determines if the FiFi response indicates insufficient information by checking for
-        a list of flexible keywords instead of rigid phrases.
-        """
         content = fifi_response_content.lower()
         insufficient_keywords = [
             "no specific information", "cannot find specific information",
@@ -142,7 +139,8 @@ class ChatApp:
                     else:
                         st.info("FiFi has limited information. Switching to web search for a better answer.")
         if self.tavily_agent:
-            with st.spinner("🌐 Searching the web with Tavily..."):
+            # --- CHANGE 2: Update the spinner text for a consistent experience ---
+            with st.spinner("🌐 Searching the web with FiFi Web Search..."):
                 last_message = chat_history[-1].content if chat_history else ""
                 return self.tavily_agent.query(last_message, chat_history[:-1])
         return {"content": "I apologize, but all systems are currently unavailable.", "success": False, "source": "error"}
@@ -161,7 +159,8 @@ def main():
         pinecone_status = "✅ Ready" if PINECONE_AVAILABLE and pinecone_api_key and assistant_name else "❌ Not configured"
         tavily_status = "✅ Ready" if openai_api_key and tavily_api_key else "❌ Not configured"
         st.write(f"**FiFi Assistant:** {pinecone_status}")
-        st.write(f"**Tavily Fallback:** {tavily_status}")
+        # --- CHANGE 3: Update the sidebar status text ---
+        st.write(f"**FiFi Web Search:** {tavily_status}")
         if st.button("🗑️ Clear Chat History"):
             st.session_state.messages = []
             st.session_state.chat_history = []
