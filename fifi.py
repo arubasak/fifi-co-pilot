@@ -17,7 +17,7 @@ except ImportError:
 from dotenv import load_dotenv
 load_dotenv()
 
-st.set_page_config(page_title="AI Chat Assistant", page_icon="🤖", layout="wide")
+st.set_page_config(page_title="FiFi Chat Assistant", page_icon="🤖", layout="wide")
 
 class PineconeAssistantTool:
     def __init__(self, api_key: str, assistant_name: str):
