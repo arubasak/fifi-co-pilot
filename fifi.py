@@ -21,6 +21,7 @@ load_dotenv()
 
 st.set_page_config(page_title="FiFi AI Chat Assistant", page_icon="🤖", layout="wide")
 
+# This class remains unchanged. Its job is just to query the API.
 class PineconeAssistantTool:
     def __init__(self, api_key: str, assistant_name: str):
         if not PINECONE_AVAILABLE:
@@ -48,13 +49,6 @@ class PineconeAssistantTool:
             return None
 
     def query(self, chat_history: List[BaseMessage]) -> Dict[str, Any]:
-        """
-        Queries Pinecone and builds a citation list with proper Markdown hyperlinks,
-        using a three-tiered priority for the link source:
-        1. metadata['source_url'] (Best)
-        2. file.signed_url (Fallback)
-        3. file.name (Plain text last resort)
-        """
         if not self.assistant:
             return None
         try:
@@ -72,43 +66,29 @@ class PineconeAssistantTool:
                         if hasattr(reference, 'file') and reference.file:
                             display_text = getattr(reference.file, 'name', 'Unknown Source')
                             link_url = None
-
-                            # Priority 1: Check for the permanent source_url in metadata.
                             if hasattr(reference.file, 'metadata') and reference.file.metadata:
                                 link_url = reference.file.metadata.get('source_url')
-                            
-                            # Priority 2: If no source_url, check for the temporary signed_url.
                             if not link_url and hasattr(reference.file, 'signed_url') and reference.file.signed_url:
                                 link_url = reference.file.signed_url
-                            
-                            # Build the citation link based on the best available URL.
                             if link_url:
-                                # Use the URL for uniqueness to prevent duplicate links.
                                 if link_url not in seen_items:
                                     link = f"[{len(seen_items) + 1}] [{display_text}]({link_url})"
                                     citations_list.append(link)
                                     seen_items.add(link_url)
                             else:
-                                # Priority 3: No URL available, so just display the plain text name.
-                                # Use the display_text for uniqueness.
                                 if display_text not in seen_items:
                                     link = f"[{len(seen_items) + 1}] {display_text}"
                                     citations_list.append(link)
                                     seen_items.add(display_text)
-                
                 if citations_list:
                     content += citations_header + "\n".join(citations_list)
 
-            return {
-                "content": content,
-                "success": True,
-                "source": "FiFi"
-            }
+            return {"content": content, "success": True, "source": "FiFi"}
         except Exception as e:
             st.error(f"Pinecone Assistant error: {str(e)}")
             return None
 
-# The rest of the file (TavilyFallbackAgent, ChatApp, main) is unchanged.
+# This class also remains unchanged.
 class TavilyFallbackAgent:
     def __init__(self, openai_api_key: str, tavily_api_key: str):
         self.llm = ChatOpenAI(model="gpt-4o-mini", api_key=openai_api_key, temperature=0.7)
@@ -129,29 +109,78 @@ class TavilyFallbackAgent:
         except Exception as e:
             return {"content": f"I apologize, but an error occurred: {e}", "success": False, "source": "error"}
 
+# --- THIS IS THE NEW, SMARTER BRAIN OF THE APPLICATION ---
 class ChatApp:
     def __init__(self):
         self.pinecone_tool = None
         self.tavily_agent = None
+
     def initialize_tools(self, pinecone_api_key: str, assistant_name: str,
                         openai_api_key: str, tavily_api_key: str):
         if PINECONE_AVAILABLE and pinecone_api_key and assistant_name:
             self.pinecone_tool = PineconeAssistantTool(pinecone_api_key, assistant_name)
         if openai_api_key and tavily_api_key:
             self.tavily_agent = TavilyFallbackAgent(openai_api_key, tavily_api_key)
+
+    def _should_use_web_fallback(self, fifi_response_content: str) -> bool:
+        """
+        Determines if the FiFi response indicates insufficient information,
+        warranting a fallback to web search. This is the sophisticated detection logic you designed.
+        """
+        content = fifi_response_content.lower()
+
+        # Direct indicators of "I don't know"
+        insufficient_indicators = [
+            "search results do not provide",
+            "search results do not contain",
+            "no specific information",
+            "do not have access to additional documents",
+            "please share them",
+            "please provide them",
+            "if you have additional documents",
+            "the search results are limited",
+            "i cannot find specific information",
+            "i don't have specific information",
+            "i cannot provide specific details",
+            "the available information is limited",
+            "does not contain information"
+        ]
+        
+        if any(indicator in content for indicator in insufficient_indicators):
+            return True
+            
+        return False
+
     def get_response(self, chat_history: List[BaseMessage]) -> Dict[str, Any]:
+        """
+        Gets a response using the new smart routing logic.
+        """
+        # First, try to get an answer from our internal specialist, FiFi.
         if self.pinecone_tool:
-            with st.spinner("🔍 Querying FiFi Assistant..."):
+            with st.spinner("🔍 Querying FiFi (Internal Specialist)..."):
                 pinecone_response = self.pinecone_tool.query(chat_history)
+                
+                # Check for a successful technical response from FiFi
                 if pinecone_response and pinecone_response.get("success"):
-                    return pinecone_response
+                    content = pinecone_response.get("content", "")
+                    
+                    # Now, analyze the *quality* of the response.
+                    if not self._should_use_web_fallback(content):
+                        # The response is good and sufficient. Return it.
+                        return pinecone_response
+                    else:
+                        # FiFi admitted its knowledge is limited. Inform the user and proceed to fallback.
+                        st.info("FiFi has limited information. Switching to web search for a better answer.")
+
+        # Fallback to Tavily if FiFi failed, was unavailable, or had insufficient knowledge.
         if self.tavily_agent:
-            st.warning("FiFi Assistant failed or is unavailable. Switching to web search fallback.")
-            with st.spinner("🌐 Searching web..."):
+            with st.spinner("🌐 Searching the web with Tavily..."):
                 last_message = chat_history[-1].content if chat_history else ""
                 return self.tavily_agent.query(last_message, chat_history[:-1])
-        return {"content": "Systems unavailable. Check API keys.", "success": False, "source": "error"}
+        
+        return {"content": "I apologize, but all systems are currently unavailable.", "success": False, "source": "error"}
 
+# The main function remains unchanged, as it correctly uses the ChatApp class.
 def main():
     st.title("🤖 AI Chat Assistant")
     st.markdown("**Powered by FiFi**")
