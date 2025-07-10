@@ -1,160 +1,330 @@
 import streamlit as st
-from pinecone import Pinecone # This will be used by the plugins
-from pinecone_plugins.assistant.models.chat import Message
-from pinecone_plugins.assistant.control.core.client.exceptions import PineconeApiException
-import traceback # Kept for potential local debugging if needed
-import datetime
-# from fpdf import FPDF # Removed FPDF import
+import os
+from typing import Optional, Dict, Any, List
+import asyncio
+from datetime import datetime
+import json
 
-# --- Configuration from Streamlit Secrets ---
+# Core dependencies
+from langchain_openai import ChatOpenAI
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain.agents import create_openai_tools_agent, AgentExecutor
+from langchain_tavily import TavilySearch
+from langchain.schema import BaseMessage
+
+# Pinecone Assistant (assuming you have pinecone-client installed)
 try:
-    API_KEY = st.secrets["PINECONE_API_KEY"]
-    ASSISTANT_NAME = st.secrets.get("PINECONE_ASSISTANT_NAME", "fifi")
-    REGION = st.secrets.get("PINECONE_REGION", "us") # This might be used by Pinecone() or Assistant()
-except KeyError as e:
-    st.error(f"Missing critical secret: {e}. Please ensure this secret is configured in your Streamlit Cloud app settings or local secrets.toml.")
-    st.stop()
-except Exception as e:
-    st.error(f"Error loading secrets: {e}. This app requires secrets to be configured.")
-    st.stop()
+    from pinecone import Pinecone
+    from pinecone_plugins.assistant.models.chat import Message
+    PINECONE_AVAILABLE = True
+except ImportError:
+    PINECONE_AVAILABLE = False
+    st.error("Pinecone client not installed. Please install: pip install pinecone-client")
 
-# --- Theme Configuration ---
+# Configuration
 st.set_page_config(
-    page_title="FiFi Co-Pilot",
-    page_icon="", # Using an emoji for the icon
-    layout="wide"
+    page_title="AI Chat Assistant",
+    page_icon="🤖",
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
-# For .streamlit/config.toml theming:
-# [theme]
-# primaryColor="#f37021"
-# backgroundColor="#FFFFFF"
-# secondaryBackgroundColor="#F0F2F6"
-# textColor="#31333F"
-# font="sans serif"
 
-# --- Initialize Pinecone client and assistant (cached for efficiency) ---
-@st.cache_resource
-def initialize_pinecone_assistant():
-    if not API_KEY:
-        st.error("Pinecone API Key is not available. Cannot initialize assistant.")
-        return None
-    try:
-        pc = Pinecone(api_key=API_KEY)
-        assistant_instance = pc.assistant.Assistant(assistant_name=ASSISTANT_NAME)
-        return assistant_instance
-    except PineconeApiException as e:
-        st.error(f"Pinecone API Error during initialization: {e}. Ensure '{ASSISTANT_NAME}' exists and API key/region are correct.")
-        return None
-    except Exception as e:
-        st.error(f"An unexpected error occurred during assistant initialization: {e}")
-        return None
-
-assistant = initialize_pinecone_assistant()
-
-# --- PDF Generation Function (REMOVED) ---
-# def generate_pdf_from_chat(chat_messages):
-#     ... (function content removed) ...
-
-# --- Initialize session state ---
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-
-# --- Function to handle message sending and processing ---
-def handle_user_query(user_query: str):
-    if not user_query:
-        return
-    if not assistant:
-        st.error("Assistant is not available. Please check configuration or try again later.")
-        return
-
-    st.session_state.messages.append({"role": "user", "content": user_query})
-
-    sdk_messages = []
-    conversion_error_message = None
-    try:
-        for msg_dict in st.session_state.messages:
-            sdk_messages.append(Message(role=str(msg_dict.get("role")), content=str(msg_dict.get("content"))))
-    except Exception as e:
-        conversion_error_message = f"Error preparing messages for assistant: {e}"
-
-    assistant_reply_content = ""
-    if conversion_error_message:
-        assistant_reply_content = conversion_error_message
-    else:
+class PineconeAssistantTool:
+    """Wrapper for Pinecone Assistant API"""
+    
+    def __init__(self, api_key: str, assistant_name: str):
+        if not PINECONE_AVAILABLE:
+            raise ImportError("Pinecone client not available")
+        
+        self.pc = Pinecone(api_key=api_key)
+        self.assistant_name = assistant_name
+        self.assistant = None
+        self._initialize_assistant()
+    
+    def _initialize_assistant(self):
+        """Initialize or get existing assistant"""
         try:
-            with st.spinner("FiFi is thinking..."):
-                response_from_sdk = assistant.chat(messages=sdk_messages, model="gpt-4o")
+            # Try to get existing assistant
+            assistants = self.pc.assistant.list_assistants()
+            for assistant in assistants:
+                if assistant['name'] == self.assistant_name:
+                    self.assistant = self.pc.assistant.Assistant(assistant_name=self.assistant_name)
+                    return
             
-            if isinstance(response_from_sdk, dict):
-                message_data = response_from_sdk.get("message")
-                if isinstance(message_data, dict):
-                    assistant_reply_content = message_data.get("content", "")
-                elif hasattr(message_data, 'content'):
-                    assistant_reply_content = message_data.content
-            elif hasattr(response_from_sdk, 'message') and hasattr(response_from_sdk.message, 'content'):
-                 assistant_reply_content = response_from_sdk.message.content
-            elif hasattr(response_from_sdk, 'content'):
-                assistant_reply_content = response_from_sdk.content
+            # Create new assistant if not found
+            st.warning(f"Assistant '{self.assistant_name}' not found. Please create it in Pinecone console first.")
             
-            if not assistant_reply_content:
-                 assistant_reply_content = "(FiFi returned an empty or unreadable reply.)"
-        except PineconeApiException as e:
-            assistant_reply_content = f"Sorry, a Pinecone API error occurred: {e}"
         except Exception as e:
-            assistant_reply_content = f"Sorry, an unexpected error occurred while FiFi was thinking: {e}"
+            st.error(f"Failed to initialize Pinecone Assistant: {str(e)}")
+    
+    def query(self, message: str, conversation_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """Query Pinecone Assistant"""
+        if not self.assistant:
+            return None
+        
+        try:
+            # Create message
+            msg = Message(content=message)
             
-    st.session_state.messages.append({"role": "assistant", "content": assistant_reply_content})
+            # Send message to assistant
+            response = self.assistant.chat(
+                messages=[msg],
+                conversation_id=conversation_id
+            )
+            
+            if response and response.choices:
+                return {
+                    "content": response.choices[0].message.content,
+                    "conversation_id": response.conversation_id,
+                    "success": True,
+                    "source": "pinecone"
+                }
+            
+            return None
+            
+        except Exception as e:
+            st.error(f"Pinecone Assistant error: {str(e)}")
+            return None
 
-# --- Streamlit App UI ---
-st.title("1-2-Taste FiFi Co-Pilot")
+class TavilyFallbackAgent:
+    """LangChain agent with Tavily as fallback tool"""
+    
+    def __init__(self, openai_api_key: str, tavily_api_key: str):
+        self.llm = ChatOpenAI(
+            model="gpt-4o-mini",
+            api_key=openai_api_key,
+            temperature=0.7
+        )
+        
+        # Initialize Tavily Search Tool
+        self.tavily_tool = TavilySearch(
+            max_results=5,
+            topic="general",
+            api_key=tavily_api_key,
+            search_depth="basic"
+        )
+        
+        # Create agent
+        self._create_agent()
+    
+    def _create_agent(self):
+        """Create LangChain agent with Tavily tool"""
+        today = datetime.now().strftime("%Y-%m-%d")
+        
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", f"""You are a helpful AI assistant with access to web search capabilities.
+            Today's date is {today}.
+            
+            When the primary knowledge source fails or doesn't have sufficient information:
+            1. Use the tavily_search tool to find current, relevant information
+            2. Provide comprehensive answers based on the search results
+            3. Always cite your sources when using web search results
+            4. Be transparent about when you're using web search vs. your base knowledge
+            
+            Guidelines:
+            - Use web search for recent events, current data, or when you need more specific information
+            - Provide accurate, helpful responses
+            - If search results are insufficient, acknowledge limitations
+            """),
+            MessagesPlaceholder(variable_name="chat_history"),
+            ("human", "{input}"),
+            MessagesPlaceholder(variable_name="agent_scratchpad"),
+        ])
+        
+        # Create agent
+        agent = create_openai_tools_agent(
+            llm=self.llm,
+            tools=[self.tavily_tool],
+            prompt=prompt
+        )
+        
+        # Create agent executor
+        self.agent_executor = AgentExecutor(
+            agent=agent,
+            tools=[self.tavily_tool],
+            verbose=True,
+            handle_parsing_errors=True,
+            max_iterations=3
+        )
+    
+    def query(self, message: str, chat_history: List[BaseMessage] = None) -> Dict[str, Any]:
+        """Query using Tavily fallback agent"""
+        try:
+            if chat_history is None:
+                chat_history = []
+            
+            response = self.agent_executor.invoke({
+                "input": message,
+                "chat_history": chat_history
+            })
+            
+            return {
+                "content": response["output"],
+                "success": True,
+                "source": "tavily_fallback"
+            }
+            
+        except Exception as e:
+            return {
+                "content": f"I apologize, but I encountered an error while processing your request: {str(e)}",
+                "success": False,
+                "source": "error"
+            }
 
-if not assistant:
-    st.warning("FiFi Co-Pilot is currently unavailable. This may be due to configuration issues or service downtime.")
-else:
-    st.sidebar.markdown("## Quick Questions")
-    preview_questions = [
-        "Help me with my recipe for a new juice drink",
-        "Suggest me some strawberry flavours for beverage",
-        "I need vanilla flavours for ice-cream"
-    ]
-    for question in preview_questions:
-        if st.sidebar.button(question, key=f"preview_{question}", use_container_width=True):
-            handle_user_query(question)
+class ChatApp:
+    """Main chat application"""
+    
+    def __init__(self):
+        self.pinecone_tool = None
+        self.tavily_agent = None
+        self.conversation_id = None
+        
+    def initialize_tools(self, pinecone_api_key: str, assistant_name: str, 
+                        openai_api_key: str, tavily_api_key: str):
+        """Initialize both Pinecone and Tavily tools"""
+        try:
+            # Initialize Pinecone Assistant
+            if PINECONE_AVAILABLE and pinecone_api_key and assistant_name:
+                self.pinecone_tool = PineconeAssistantTool(pinecone_api_key, assistant_name)
+            
+            # Initialize Tavily Fallback Agent
+            if openai_api_key and tavily_api_key:
+                self.tavily_agent = TavilyFallbackAgent(openai_api_key, tavily_api_key)
+                
+        except Exception as e:
+            st.error(f"Failed to initialize tools: {str(e)}")
+    
+    def get_response(self, message: str, chat_history: List[BaseMessage] = None) -> Dict[str, Any]:
+        """Get response with fallback logic"""
+        
+        # Try Pinecone Assistant first
+        if self.pinecone_tool:
+            with st.spinner("🔍 Querying Pinecone Assistant..."):
+                pinecone_response = self.pinecone_tool.query(message, self.conversation_id)
+                
+                if pinecone_response and pinecone_response.get("success"):
+                    # Update conversation ID for context
+                    self.conversation_id = pinecone_response.get("conversation_id")
+                    return pinecone_response
+        
+        # Fallback to Tavily if Pinecone fails or unavailable
+        if self.tavily_agent:
+            with st.spinner("🌐 Searching web for additional information..."):
+                return self.tavily_agent.query(message, chat_history)
+        
+        # Final fallback
+        return {
+            "content": "I apologize, but both primary and backup systems are currently unavailable. Please check your API keys and try again.",
+            "success": False,
+            "source": "error"
+        }
 
-    user_prompt = st.chat_input("Ask FiFi Co-Pilot...", key="main_chat_input", disabled=(not assistant))
-    if user_prompt:
-        handle_user_query(user_prompt)
+def main():
+    st.title("🤖 AI Chat Assistant")
+    st.markdown("**Powered by Pinecone Assistant with Tavily Web Search Fallback**")
+    
+    # Sidebar for configuration
+    with st.sidebar:
+        st.header("⚙️ Configuration")
+        
+        # API Keys
+        st.subheader("API Keys")
+        pinecone_api_key = st.text_input("Pinecone API Key", type="password", 
+                                       value=os.getenv("PINECONE_API_KEY", ""))
+        assistant_name = st.text_input("Pinecone Assistant Name", 
+                                     value=os.getenv("PINECONE_ASSISTANT_NAME", ""))
+        openai_api_key = st.text_input("OpenAI API Key", type="password",
+                                     value=os.getenv("OPENAI_API_KEY", ""))
+        tavily_api_key = st.text_input("Tavily API Key", type="password",
+                                     value=os.getenv("TAVILY_API_KEY", ""))
+        
+        # Tool Status
+        st.subheader("🔧 Tool Status")
+        pinecone_status = "✅ Ready" if (PINECONE_AVAILABLE and pinecone_api_key and assistant_name) else "❌ Not configured"
+        tavily_status = "✅ Ready" if (openai_api_key and tavily_api_key) else "❌ Not configured"
+        
+        st.write(f"**Pinecone Assistant:** {pinecone_status}")
+        st.write(f"**Tavily Fallback:** {tavily_status}")
+        
+        # Clear chat button
+        if st.button("🗑️ Clear Chat History"):
+            st.session_state.messages = []
+            st.session_state.chat_history = []
+            st.rerun()
+        
+        # Instructions
+        st.subheader("📋 How it works")
+        st.markdown("""
+        1. **Primary**: Queries Pinecone Assistant first
+        2. **Fallback**: If Pinecone fails, uses Tavily web search
+        3. **Smart Routing**: Automatically switches between tools
+        4. **Source Attribution**: Shows which tool provided the answer
+        """)
+    
+    # Initialize session state
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
+    if "chat_history" not in st.session_state:
+        st.session_state.chat_history = []
+    if "chat_app" not in st.session_state:
+        st.session_state.chat_app = ChatApp()
+    
+    # Initialize tools
+    if pinecone_api_key or (openai_api_key and tavily_api_key):
+        st.session_state.chat_app.initialize_tools(
+            pinecone_api_key, assistant_name, openai_api_key, tavily_api_key
+        )
+    
+    # Display chat messages
+    for message in st.session_state.messages:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
+            if "source" in message:
+                source_emoji = {
+                    "pinecone": "🔍",
+                    "tavily_fallback": "🌐",
+                    "error": "⚠️"
+                }
+                st.caption(f"{source_emoji.get(message['source'], '🤖')} Source: {message['source']}")
+    
+    # Chat input
+    if prompt := st.chat_input("Ask me anything..."):
+        # Check if at least one tool is configured
+        if not (pinecone_api_key and assistant_name) and not (openai_api_key and tavily_api_key):
+            st.error("Please configure at least one set of API keys in the sidebar.")
+            return
+        
+        # Add user message
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        st.session_state.chat_history.append(HumanMessage(content=prompt))
+        
+        with st.chat_message("user"):
+            st.markdown(prompt)
+        
+        # Get AI response
+        with st.chat_message("assistant"):
+            response = st.session_state.chat_app.get_response(
+                prompt, st.session_state.chat_history
+            )
+            
+            st.markdown(response["content"])
+            
+            # Show source
+            source_emoji = {
+                "pinecone": "🔍",
+                "tavily_fallback": "🌐", 
+                "error": "⚠️"
+            }
+            st.caption(f"{source_emoji.get(response['source'], '🤖')} Source: {response['source']}")
+            
+            # Add assistant message
+            st.session_state.messages.append({
+                "role": "assistant", 
+                "content": response["content"],
+                "source": response["source"]
+            })
+            st.session_state.chat_history.append(AIMessage(content=response["content"]))
 
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.markdown(str(message.get("content","")))
-
-st.sidebar.markdown("---")
-if st.session_state.messages:
-    chat_export_data_txt = "\n\n".join([f"{str(msg.get('role','Unknown')).capitalize()}: {str(msg.get('content',''))}" for msg in st.session_state.messages])
-    current_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    st.sidebar.download_button(
-        label="📥 Download Chat (TXT)",
-        data=chat_export_data_txt,
-        file_name=f"fifi_chat_{current_time}.txt",
-        mime="text/plain",
-        use_container_width=True
-    )
-    # --- PDF Download Button and Logic REMOVED ---
-    # try:
-    #     pdf_data = generate_pdf_from_chat(st.session_state.messages)
-    #     st.sidebar.download_button(
-    #         label="📄 Download Chat (PDF)",
-    #         data=pdf_data, 
-    #         file_name=f"fifi_chat_{current_time}.pdf",
-    #         mime="application/pdf",
-    #         use_container_width=True
-    #     )
-    # except Exception as e:
-    #     st.sidebar.error(f"PDF generation failed: {e}")
-
-if st.sidebar.button("🧹 Clear Chat History", use_container_width=True):
-    st.session_state.messages = []
-
-st.sidebar.markdown("---")
-st.sidebar.info("💡 Tip: Ask about specific ingredients, applications, or technical details!")
+if __name__ == "__main__":
+    main()
