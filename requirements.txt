@@ -9,9 +9,9 @@ langchain-core
 langchain-openai
 langchain-tavily
 
-# Pinecone client and the specific assistant plugin
-pinecone-client
-pinecone-plugin-assistant  # Required for the Pinecone Assistant functionality
+# CORRECT Pinecone client and the specific assistant plugin
+pinecone
+pinecone-plugin-assistant
 
-# To load environment variables from a .env file (best practice for API keys)
+# To load environment variables from a .env file
 python-dotenv
