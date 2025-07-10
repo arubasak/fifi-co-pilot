@@ -31,7 +31,6 @@ class PineconeAssistantTool:
 
     def _initialize_assistant(self):
         try:
-            # A more direct prompt to encourage citing
             instructions = (
                 "You are a helpful AI assistant. Answer questions based on the provided documents. "
                 "When you use information from a document, you MUST generate an inline citation marker, like [1]. "
@@ -50,8 +49,11 @@ class PineconeAssistantTool:
 
     def query(self, chat_history: List[BaseMessage]) -> Dict[str, Any]:
         """
-        Queries Pinecone and correctly parses the `response.citations` field.
-        It uses the file's `name` as the default citation and enhances it with `metadata.source_url` if available.
+        Queries Pinecone and builds a citation list with proper Markdown hyperlinks,
+        using a three-tiered priority for the link source:
+        1. metadata['source_url'] (Best)
+        2. file.signed_url (Fallback)
+        3. file.name (Plain text last resort)
         """
         if not self.assistant:
             return None
@@ -60,31 +62,39 @@ class PineconeAssistantTool:
             response = self.assistant.chat(messages=pinecone_messages, model="gpt-4o")
             content = response.message.content
 
-            # Correctly parse the `response.citations` object as per Pinecone documentation
             if hasattr(response, 'citations') and response.citations:
                 citations_header = "\n\n---\n**Sources:**\n"
                 citations_list = []
-                seen_sources = set()
+                seen_items = set()
 
-                # Iterate over each citation group returned by the API
                 for citation in response.citations:
-                    # Iterate over each reference within that citation
                     for reference in citation.references:
                         if hasattr(reference, 'file') and reference.file:
-                            source_display_name = None
+                            display_text = getattr(reference.file, 'name', 'Unknown Source')
+                            link_url = None
+
+                            # Priority 1: Check for the permanent source_url in metadata.
+                            if hasattr(reference.file, 'metadata') and reference.file.metadata:
+                                link_url = reference.file.metadata.get('source_url')
                             
-                            # Default fallback: Use the file's name, as per your request.
-                            if hasattr(reference.file, 'name'):
-                                source_display_name = reference.file.name
+                            # Priority 2: If no source_url, check for the temporary signed_url.
+                            if not link_url and hasattr(reference.file, 'signed_url') and reference.file.signed_url:
+                                link_url = reference.file.signed_url
                             
-                            # Enhancement: If metadata with a source_url exists, use it instead.
-                            if hasattr(reference.file, 'metadata') and reference.file.metadata and 'source_url' in reference.file.metadata:
-                                source_display_name = reference.file.metadata['source_url']
-                            
-                            # Add the determined source to our list if it's valid and new
-                            if source_display_name and source_display_name not in seen_sources:
-                                citations_list.append(f"[{len(seen_sources) + 1}] {source_display_name}")
-                                seen_sources.add(source_display_name)
+                            # Build the citation link based on the best available URL.
+                            if link_url:
+                                # Use the URL for uniqueness to prevent duplicate links.
+                                if link_url not in seen_items:
+                                    link = f"[{len(seen_items) + 1}] [{display_text}]({link_url})"
+                                    citations_list.append(link)
+                                    seen_items.add(link_url)
+                            else:
+                                # Priority 3: No URL available, so just display the plain text name.
+                                # Use the display_text for uniqueness.
+                                if display_text not in seen_items:
+                                    link = f"[{len(seen_items) + 1}] {display_text}"
+                                    citations_list.append(link)
+                                    seen_items.add(display_text)
                 
                 if citations_list:
                     content += citations_header + "\n".join(citations_list)
@@ -98,7 +108,7 @@ class PineconeAssistantTool:
             st.error(f"Pinecone Assistant error: {str(e)}")
             return None
 
-# The TavilyFallbackAgent and ChatApp classes remain unchanged.
+# The rest of the file (TavilyFallbackAgent, ChatApp, main) is unchanged.
 class TavilyFallbackAgent:
     def __init__(self, openai_api_key: str, tavily_api_key: str):
         self.llm = ChatOpenAI(model="gpt-4o-mini", api_key=openai_api_key, temperature=0.7)
