@@ -7,6 +7,7 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain.agents import create_openai_tools_agent, AgentExecutor
 from langchain_tavily import TavilySearch
 from datetime import datetime
+
 try:
     from pinecone import Pinecone
     from pinecone_plugins.assistant.models.chat import Message as PineconeMessage
@@ -14,10 +15,11 @@ try:
 except ImportError:
     PINECONE_AVAILABLE = False
     st.error("Pinecone packages not found. Please install: pip install pinecone pinecone-plugin-assistant")
+
 from dotenv import load_dotenv
 load_dotenv()
 
-st.set_page_config(page_title="FiFi Chat Assistant", page_icon="🤖", layout="wide")
+st.set_page_config(page_title="FiFi AI Chat Assistant", page_icon="🤖", layout="wide")
 
 class PineconeAssistantTool:
     def __init__(self, api_key: str, assistant_name: str):
@@ -41,6 +43,10 @@ class PineconeAssistantTool:
             return None
 
     def query(self, chat_history: List[BaseMessage]) -> Dict[str, Any]:
+        """
+        Queries Pinecone and correctly parses the 'response.citations' field 
+        to extract source URLs from the file metadata for citations.
+        """
         if not self.assistant:
             return None
         try:
@@ -48,35 +54,38 @@ class PineconeAssistantTool:
             response = self.assistant.chat(messages=pinecone_messages, model="gpt-4o")
             content = response.message.content
 
-            # This logic now works perfectly because the preprocessing script added the metadata.
-            if hasattr(response, 'documents') and response.documents:
+            if hasattr(response, 'citations') and response.citations:
                 citations_header = "\n\n---\n**Sources:**\n"
                 citations_list = []
                 seen_urls = set()
 
-                for doc in response.documents:
-                    if doc.metadata and 'source_url' in doc.metadata:
-                        source_url = doc.metadata['source_url']
-                        if source_url not in seen_urls:
-                            citations_list.append(f"[{len(seen_urls) + 1}] {source_url}")
-                            seen_urls.add(source_url)
+                for citation in response.citations:
+                    for reference in citation.references:
+                        if hasattr(reference, 'file') and reference.file and hasattr(reference.file, 'metadata') and reference.file.metadata:
+                            source_url = reference.file.metadata.get('source_url')
+                            if source_url and source_url not in seen_urls:
+                                citations_list.append(f"[{len(seen_urls) + 1}] {source_url}")
+                                seen_urls.add(source_url)
                 
                 if citations_list:
                     content += citations_header + "\n".join(citations_list)
 
-            return {"content": content, "success": True, "source": "pinecone"}
+            return {
+                "content": content,
+                "success": True,
+                "source": "FiFi"  # Set source to FiFi
+            }
         except Exception as e:
             st.error(f"Pinecone Assistant error: {str(e)}")
             return None
 
 class TavilyFallbackAgent:
-    # ... (This class is unchanged)
     def __init__(self, openai_api_key: str, tavily_api_key: str):
         self.llm = ChatOpenAI(model="gpt-4o-mini", api_key=openai_api_key, temperature=0.7)
         self.tavily_tool = TavilySearch(max_results=5, api_key=tavily_api_key)
         today = datetime.now().strftime("%Y-%m-%d")
         prompt = ChatPromptTemplate.from_messages([
-            ("system", f"You are a helpful FiFi assistant with web search. Today's date is {today}."),
+            ("system", f"You are a helpful AI assistant with web search. Today's date is {today}."),
             MessagesPlaceholder(variable_name="chat_history"),
             ("human", "{input}"),
             MessagesPlaceholder(variable_name="agent_scratchpad"),
@@ -92,7 +101,6 @@ class TavilyFallbackAgent:
             return {"content": f"I apologize, but an error occurred: {e}", "success": False, "source": "error"}
 
 class ChatApp:
-    # ... (This class is unchanged)
     def __init__(self):
         self.pinecone_tool = None
         self.tavily_agent = None
@@ -106,22 +114,23 @@ class ChatApp:
 
     def get_response(self, chat_history: List[BaseMessage]) -> Dict[str, Any]:
         if self.pinecone_tool:
-            with st.spinner("🔍 Querying Pinecone Assistant..."):
+            # Changed spinner text
+            with st.spinner("🔍 Querying FiFi Assistant..."):
                 pinecone_response = self.pinecone_tool.query(chat_history)
                 if pinecone_response and pinecone_response.get("success"):
                     return pinecone_response
         if self.tavily_agent:
-            st.warning("Pinecone Assistant failed. Switching to web search.")
+            # Changed warning message
+            st.warning("FiFi Assistant failed or is unavailable. Switching to web search fallback.")
             with st.spinner("🌐 Searching web..."):
                 last_message = chat_history[-1].content if chat_history else ""
                 return self.tavily_agent.query(last_message, chat_history[:-1])
         return {"content": "Systems unavailable. Check API keys.", "success": False, "source": "error"}
 
-
 def main():
-    # ... (This function is unchanged)
     st.title("🤖 AI Chat Assistant")
-    st.markdown("**Powered by Pinecone Assistant with Tavily Fallback**")
+    # Changed subtitle
+    st.markdown("**Powered by FiFi**")
     with st.sidebar:
         st.header("⚙️ Configuration")
         st.info("API Keys are loaded from environment variables.", icon="🔐")
@@ -129,15 +138,19 @@ def main():
         openai_api_key = os.getenv("OPENAI_API_KEY")
         tavily_api_key = os.getenv("TAVILY_API_KEY")
         assistant_name = st.text_input("Pinecone Assistant Name", value=os.getenv("PINECONE_ASSISTANT_NAME", "my-chat-assistant"))
+        
         st.subheader("🔧 Tool Status")
         pinecone_status = "✅ Ready" if PINECONE_AVAILABLE and pinecone_api_key and assistant_name else "❌ Not configured"
         tavily_status = "✅ Ready" if openai_api_key and tavily_api_key else "❌ Not configured"
-        st.write(f"**Pinecone Assistant:** {pinecone_status}")
+        # Changed sidebar status text
+        st.write(f"**FiFi Assistant:** {pinecone_status}")
         st.write(f"**Tavily Fallback:** {tavily_status}")
+        
         if st.button("🗑️ Clear Chat History"):
             st.session_state.messages = []
             st.session_state.chat_history = []
             st.rerun()
+            
     if "messages" not in st.session_state:
         st.session_state.messages = []
     if "chat_history" not in st.session_state:
@@ -145,24 +158,29 @@ def main():
     if "chat_app" not in st.session_state:
         st.session_state.chat_app = ChatApp()
         st.session_state.chat_app.initialize_tools(pinecone_api_key, assistant_name, openai_api_key, tavily_api_key)
+        
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"], unsafe_allow_html=True)
-            if "source" in message and message["source"] != "pinecone":
+            if "source" in message:
                 st.caption(f"Source: {message['source']}")
+                
     if prompt := st.chat_input("Ask me anything..."):
         if not (pinecone_api_key and assistant_name) and not (openai_api_key and tavily_api_key):
             st.error("Please configure API keys in your environment variables.")
             return
+            
         st.session_state.messages.append({"role": "user", "content": prompt})
         st.session_state.chat_history.append(HumanMessage(content=prompt))
+        
         with st.chat_message("user"):
             st.markdown(prompt)
+            
         with st.chat_message("assistant"):
             response = st.session_state.chat_app.get_response(st.session_state.chat_history)
             st.markdown(response["content"], unsafe_allow_html=True)
-            if response['source'] != 'pinecone':
-                st.caption(f"Source: {response['source']}")
+            st.caption(f"Source: {response['source']}")
+            
             st.session_state.messages.append({"role": "assistant", "content": response["content"], "source": response["source"]})
             st.session_state.chat_history.append(AIMessage(content=response["content"]))
 
