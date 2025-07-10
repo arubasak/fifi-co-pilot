@@ -1,3 +1,17 @@
+# requirements.txt
+
+# Core web framework
 streamlit
-pinecone>=7.0.2 # Use the current official package
-fpdf2
+
+# LangChain libraries for building the agent logic
+langchain
+langchain-core
+langchain-openai
+langchain-tavily
+
+# Pinecone client and the specific assistant plugin
+pinecone-client
+pinecone-plugin-assistant  # Required for the Pinecone Assistant functionality
+
+# To load environment variables from a .env file (best practice for API keys)
+python-dotenv
