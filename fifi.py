@@ -76,7 +76,7 @@ class TavilyFallbackAgent:
         self.tavily_tool = TavilySearch(max_results=5, api_key=tavily_api_key)
         today = datetime.now().strftime("%Y-%m-%d")
         prompt = ChatPromptTemplate.from_messages([
-            ("system", f"You are a helpful AI assistant with web search. Today's date is {today}."),
+            ("system", f"You are a helpful FiFi assistant with web search. Today's date is {today}."),
             MessagesPlaceholder(variable_name="chat_history"),
             ("human", "{input}"),
             MessagesPlaceholder(variable_name="agent_scratchpad"),
