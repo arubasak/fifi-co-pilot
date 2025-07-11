@@ -1,5 +1,6 @@
 import streamlit as st
 import os
+import re
 from typing import List, Dict, Any
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
@@ -23,8 +24,7 @@ st.set_page_config(page_title="FiFi AI Chat Assistant", page_icon="🤖", layout
 
 class PineconeAssistantTool:
     def __init__(self, api_key: str, assistant_name: str):
-        if not PINECONE_AVAILABLE:
-            raise ImportError("Pinecone client not available.")
+        if not PINECONE_AVAILABLE: raise ImportError("Pinecone client not available.")
         self.pc = Pinecone(api_key=api_key)
         self.assistant_name = assistant_name
         self.assistant = self._initialize_assistant()
@@ -58,7 +58,6 @@ class PineconeAssistantTool:
                 for citation in response.citations:
                     for reference in citation.references:
                         if hasattr(reference, 'file') and reference.file:
-                            display_text = None
                             link_url = None
                             if hasattr(reference.file, 'metadata') and reference.file.metadata:
                                 link_url = reference.file.metadata.get('source_url')
@@ -66,6 +65,11 @@ class PineconeAssistantTool:
                                 link_url = reference.file.signed_url
                             
                             if link_url:
+                                if '?' in link_url:
+                                    link_url += '&utm_source=fifi-in'
+                                else:
+                                    link_url += '?utm_source=fifi-in'
+                                
                                 display_text = link_url
                                 if display_text not in seen_items:
                                     link = f"[{len(seen_items) + 1}] [{display_text}]({link_url})"
@@ -97,10 +101,23 @@ class TavilyFallbackAgent:
         ])
         agent = create_openai_tools_agent(self.llm, [self.tavily_tool], prompt)
         self.agent_executor = AgentExecutor(agent=agent, tools=[self.tavily_tool], verbose=True, handle_parsing_errors=True)
+
+    def _add_utm_to_links(self, content: str) -> str:
+        def replacer(match):
+            url = match.group(1)
+            if '?' in url:
+                new_url = f"{url}&utm_source=12taste-fifi"
+            else:
+                new_url = f"{url}?utm_source=12taste-fifi"
+            return f"({new_url})"
+        return re.sub(r'(?<=\])\(([^)]+)\)', replacer, content)
+
     def query(self, message: str, chat_history: List[BaseMessage]) -> Dict[str, Any]:
         try:
             response = self.agent_executor.invoke({"input": message, "chat_history": chat_history})
-            return {"content": response["output"], "success": True, "source": "FiFi Web Search"}
+            original_content = response["output"]
+            modified_content = self._add_utm_to_links(original_content)
+            return {"content": modified_content, "success": True, "source": "FiFi Web Search"}
         except Exception as e:
             return {"content": f"I apologize, but an error occurred: {e}", "success": False, "source": "error"}
 
