@@ -103,12 +103,17 @@ class TavilyFallbackAgent:
         self.agent_executor = AgentExecutor(agent=agent, tools=[self.tavily_tool], verbose=True, handle_parsing_errors=True)
 
     def _add_utm_to_links(self, content: str) -> str:
+        """
+        Finds all Markdown links in a string and appends the new UTM parameters.
+        """
         def replacer(match):
             url = match.group(1)
+            # The new, more detailed UTM parameters
+            utm_params = "utm_source=12taste.com&utm_medium=fifi-chat"
             if '?' in url:
-                new_url = f"{url}&utm_source=12taste-fifi"
+                new_url = f"{url}&{utm_params}"
             else:
-                new_url = f"{url}?utm_source=12taste-fifi"
+                new_url = f"{url}?{utm_params}"
             return f"({new_url})"
         return re.sub(r'(?<=\])\(([^)]+)\)', replacer, content)
 
