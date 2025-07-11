@@ -58,18 +58,21 @@ class PineconeAssistantTool:
                 for citation in response.citations:
                     for reference in citation.references:
                         if hasattr(reference, 'file') and reference.file:
-                            display_text = getattr(reference.file, 'name', 'Unknown Source')
+                            display_text = None
                             link_url = None
                             if hasattr(reference.file, 'metadata') and reference.file.metadata:
                                 link_url = reference.file.metadata.get('source_url')
                             if not link_url and hasattr(reference.file, 'signed_url') and reference.file.signed_url:
                                 link_url = reference.file.signed_url
+                            
                             if link_url:
-                                if link_url not in seen_items:
+                                display_text = link_url
+                                if display_text not in seen_items:
                                     link = f"[{len(seen_items) + 1}] [{display_text}]({link_url})"
                                     citations_list.append(link)
-                                    seen_items.add(link_url)
+                                    seen_items.add(display_text)
                             else:
+                                display_text = getattr(reference.file, 'name', 'Unknown Source')
                                 if display_text not in seen_items:
                                     link = f"[{len(seen_items) + 1}] {display_text}"
                                     citations_list.append(link)
@@ -97,7 +100,6 @@ class TavilyFallbackAgent:
     def query(self, message: str, chat_history: List[BaseMessage]) -> Dict[str, Any]:
         try:
             response = self.agent_executor.invoke({"input": message, "chat_history": chat_history})
-            # --- CHANGE 1: Set the source to the new branded name ---
             return {"content": response["output"], "success": True, "source": "FiFi Web Search"}
         except Exception as e:
             return {"content": f"I apologize, but an error occurred: {e}", "success": False, "source": "error"}
@@ -106,14 +108,12 @@ class ChatApp:
     def __init__(self):
         self.pinecone_tool = None
         self.tavily_agent = None
-
     def initialize_tools(self, pinecone_api_key: str, assistant_name: str,
                         openai_api_key: str, tavily_api_key: str):
         if PINECONE_AVAILABLE and pinecone_api_key and assistant_name:
             self.pinecone_tool = PineconeAssistantTool(pinecone_api_key, assistant_name)
         if openai_api_key and tavily_api_key:
             self.tavily_agent = TavilyFallbackAgent(openai_api_key, tavily_api_key)
-
     def _should_use_web_fallback(self, fifi_response_content: str) -> bool:
         content = fifi_response_content.lower()
         insufficient_keywords = [
@@ -127,7 +127,6 @@ class ChatApp:
         if any(keyword in content for keyword in insufficient_keywords):
             return True
         return False
-
     def get_response(self, chat_history: List[BaseMessage]) -> Dict[str, Any]:
         if self.pinecone_tool:
             with st.spinner("🔍 Querying FiFi (Internal Specialist)..."):
@@ -139,7 +138,6 @@ class ChatApp:
                     else:
                         st.info("FiFi has limited information. Switching to web search for a better answer.")
         if self.tavily_agent:
-            # --- CHANGE 2: Update the spinner text for a consistent experience ---
             with st.spinner("🌐 Searching the web with FiFi Web Search..."):
                 last_message = chat_history[-1].content if chat_history else ""
                 return self.tavily_agent.query(last_message, chat_history[:-1])
@@ -159,7 +157,6 @@ def main():
         pinecone_status = "✅ Ready" if PINECONE_AVAILABLE and pinecone_api_key and assistant_name else "❌ Not configured"
         tavily_status = "✅ Ready" if openai_api_key and tavily_api_key else "❌ Not configured"
         st.write(f"**FiFi Assistant:** {pinecone_status}")
-        # --- CHANGE 3: Update the sidebar status text ---
         st.write(f"**FiFi Web Search:** {tavily_status}")
         if st.button("🗑️ Clear Chat History"):
             st.session_state.messages = []
