@@ -1,7 +1,6 @@
 import streamlit as st
 import os
 import re
-import json
 from typing import List, Dict, Any
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
@@ -21,7 +20,7 @@ except ImportError:
 from dotenv import load_dotenv
 load_dotenv()
 
-st.set_page_config(page_title="FiFi AI Chat Assistant - Enhanced", page_icon="🤖", layout="wide")
+st.set_page_config(page_title="FiFi AI Chat Assistant", page_icon="🤖", layout="wide")
 
 class PineconeAssistantTool:
     def __init__(self, api_key: str, assistant_name: str):
@@ -113,8 +112,7 @@ class PineconeAssistantTool:
                 "success": True, 
                 "source": "FiFi",
                 "has_citations": has_citations,
-                "response_length": len(content),
-                "raw_content": content  # For debugging
+                "response_length": len(content)
             }
         except Exception as e:
             st.error(f"Pinecone Assistant error: {str(e)}")
@@ -177,11 +175,6 @@ class ChatApp:
     def __init__(self):
         self.pinecone_tool = None
         self.tavily_agent = None
-        self.debug_mode = False
-        
-    def set_debug_mode(self, debug: bool):
-        """Enable or disable debug mode for detailed fallback analysis."""
-        self.debug_mode = debug
         
     def initialize_tools(self, pinecone_api_key: str, assistant_name: str,
                         openai_api_key: str, tavily_api_key: str):
@@ -190,150 +183,86 @@ class ChatApp:
         if openai_api_key and tavily_api_key:
             self.tavily_agent = TavilyFallbackAgent(openai_api_key, tavily_api_key)
 
-    def _should_use_web_fallback(self, pinecone_response: Dict[str, Any]) -> tuple[bool, str]:
-        """Enhanced fallback detection with detailed reasoning."""
+    def _should_use_web_fallback(self, pinecone_response: Dict[str, Any]) -> bool:
+        """Enhanced fallback detection logic."""
         content = pinecone_response.get("content", "").lower()
-        reasons = []
         
-        # Expanded insufficient information keywords
+        # Comprehensive list of insufficient information indicators
         insufficient_keywords = [
-            # Original keywords
-            "no specific information", "cannot find specific information",
-            "i don't have access", "do not have access",
-            "information is not available", "not contain specific information",
-            "search results do not provide", "search results do not contain",
-            "insufficient information", "limited information",
-            "additional documents", "please provide more context",
+            # Direct statements of not knowing
+            "i don't have specific information", "i don't know", "i'm not sure", 
+            "i cannot help", "i cannot provide", "cannot find specific information",
+            "no specific information", "no information about", "don't have information",
             
-            # Additional keywords
-            "i don't know", "i'm not sure", "i cannot help",
-            "outside my knowledge", "not in my database",
-            "no information about", "cannot provide information",
-            "don't have information", "unable to find",
-            "no data available", "no relevant information",
-            "i don't have specific information", "not available in my knowledge",
-            "cannot answer", "no details about", "not familiar with",
-            "beyond my knowledge", "no records of", "not documented"
+            # Access and availability issues
+            "i don't have access", "do not have access", "information is not available",
+            "not available in my knowledge", "not contain specific information",
+            "unable to find", "no data available", "no relevant information",
+            
+            # Search and document related
+            "search results do not provide", "search results do not contain",
+            "not in my database", "no records of", "not documented",
+            
+            # Uncertainty indicators
+            "insufficient information", "limited information", "outside my knowledge",
+            "beyond my knowledge", "not familiar with", "cannot answer",
+            "additional documents", "please provide more context"
         ]
         
         # Check for insufficient information keywords
-        for keyword in insufficient_keywords:
-            if keyword in content:
-                reasons.append(f"Found insufficient info keyword: '{keyword}'")
-                break
+        if any(keyword in content for keyword in insufficient_keywords):
+            return True
         
         # Check if response lacks citations (might indicate generic response)
         if not pinecone_response.get("has_citations", False):
             if "[1]" not in pinecone_response.get("content", "") and "**Sources:**" not in pinecone_response.get("content", ""):
-                reasons.append("No citations found - possibly generic response")
+                return True
         
-        # Check for very short responses
-        response_length = pinecone_response.get("response_length", 0)
-        if response_length < 100:
-            reasons.append(f"Response too short ({response_length} chars)")
+        # Check for very short responses (likely insufficient)
+        if pinecone_response.get("response_length", 0) < 100:
+            return True
         
-        # Check for generic phrases that might indicate uncertainty
+        # Check for generic/uncertain language patterns
         generic_phrases = [
             "based on my knowledge", "generally speaking", "typically",
-            "in general", "it's possible that", "might be", "could be"
+            "in general", "it's possible that", "might be", "could be",
+            "often", "usually", "commonly"
         ]
-        for phrase in generic_phrases:
-            if phrase in content:
-                reasons.append(f"Found generic phrase: '{phrase}'")
-                break
+        if any(phrase in content for phrase in generic_phrases):
+            # Only trigger fallback if it's a very generic response (multiple indicators)
+            generic_count = sum(1 for phrase in generic_phrases if phrase in content)
+            if generic_count >= 2:
+                return True
         
-        should_fallback = len(reasons) > 0
-        reason_text = "; ".join(reasons) if reasons else "Response seems adequate"
-        
-        return should_fallback, reason_text
+        return False
 
     def get_response(self, chat_history: List[BaseMessage]) -> Dict[str, Any]:
-        debug_info = {
-            "pinecone_attempted": False,
-            "pinecone_response": None,
-            "fallback_triggered": False,
-            "fallback_reason": "",
-            "tavily_used": False
-        }
-        
         if self.pinecone_tool:
-            debug_info["pinecone_attempted"] = True
             with st.spinner("🔍 Querying FiFi (Internal Specialist)..."):
                 pinecone_response = self.pinecone_tool.query(chat_history)
-                debug_info["pinecone_response"] = pinecone_response
                 
                 if pinecone_response and pinecone_response.get("success"):
-                    should_fallback, fallback_reason = self._should_use_web_fallback(pinecone_response)
-                    debug_info["fallback_triggered"] = should_fallback
-                    debug_info["fallback_reason"] = fallback_reason
-                    
-                    if self.debug_mode:
-                        self._display_debug_info(pinecone_response, should_fallback, fallback_reason)
+                    should_fallback = self._should_use_web_fallback(pinecone_response)
                     
                     if not should_fallback:
-                        return {**pinecone_response, "debug_info": debug_info}
+                        return pinecone_response
                     else:
-                        st.info(f"🔄 FiFi has limited information ({fallback_reason}). Switching to web search for a better answer.")
+                        st.info("🔄 FiFi has limited information on this topic. Switching to web search for a more comprehensive answer.")
         
         if self.tavily_agent:
-            debug_info["tavily_used"] = True
             with st.spinner("🌐 Searching the web with FiFi Web Search..."):
                 last_message = chat_history[-1].content if chat_history else ""
-                tavily_response = self.tavily_agent.query(last_message, chat_history[:-1])
-                return {**tavily_response, "debug_info": debug_info}
+                return self.tavily_agent.query(last_message, chat_history[:-1])
         
         return {
             "content": "I apologize, but all systems are currently unavailable.", 
             "success": False, 
-            "source": "error",
-            "debug_info": debug_info
+            "source": "error"
         }
-    
-    def _display_debug_info(self, pinecone_response: Dict, should_fallback: bool, fallback_reason: str):
-        """Display detailed debug information."""
-        with st.expander("🐛 Debug Information", expanded=True):
-            st.write("**Pinecone Response Analysis:**")
-            st.write(f"- Content length: {pinecone_response.get('response_length', 0)} characters")
-            st.write(f"- Has citations: {pinecone_response.get('has_citations', False)}")
-            st.write(f"- Should fallback: {should_fallback}")
-            st.write(f"- Fallback reason: {fallback_reason}")
-            
-            st.write("**Raw Response Preview:**")
-            raw_content = pinecone_response.get('raw_content', '')
-            st.code(raw_content[:500] + "..." if len(raw_content) > 500 else raw_content)
-
-def create_test_scenarios():
-    """Create test scenarios to verify fallback functionality."""
-    return [
-        {
-            "name": "Generic Knowledge Test",
-            "query": "What is the capital of Mars?",
-            "expected_fallback": True,
-            "description": "Should trigger fallback for unknown information"
-        },
-        {
-            "name": "Current Events Test", 
-            "query": "What happened in the news today?",
-            "expected_fallback": True,
-            "description": "Should trigger fallback for current events"
-        },
-        {
-            "name": "Recent Technology Test",
-            "query": "What are the latest AI model releases in 2025?",
-            "expected_fallback": True,
-            "description": "Should trigger fallback for recent tech developments"
-        },
-        {
-            "name": "Specific Product Test",
-            "query": "Tell me about the iPhone 16 Pro Max specifications",
-            "expected_fallback": True,
-            "description": "Should trigger fallback if not in knowledge base"
-        }
-    ]
 
 def main():
-    st.title("🤖 Enhanced FiFi Chat Assistant")
-    st.markdown("**Powered by FiFi with Advanced Fallback Testing**")
+    st.title("🤖 FiFi AI Chat Assistant")
+    st.markdown("**Powered by FiFi with Smart Fallback**")
     
     # Sidebar configuration
     with st.sidebar:
@@ -349,9 +278,6 @@ def main():
             value=os.getenv("PINECONE_ASSISTANT_NAME", "my-chat-assistant")
         )
         
-        # Debug mode toggle
-        debug_mode = st.checkbox("🐛 Enable Debug Mode", value=False)
-        
         # Tool status
         st.subheader("🔧 Tool Status")
         pinecone_status = "✅ Ready" if PINECONE_AVAILABLE and pinecone_api_key and assistant_name else "❌ Not configured"
@@ -359,32 +285,10 @@ def main():
         st.write(f"**FiFi Assistant:** {pinecone_status}")
         st.write(f"**FiFi Web Search:** {tavily_status}")
         
-        # Test scenarios
-        st.subheader("🧪 Test Fallback")
-        test_scenarios = create_test_scenarios()
-        
-        if st.button("🚀 Run All Tests"):
-            st.session_state.run_tests = True
-            
-        st.write("**Individual Tests:**")
-        for i, scenario in enumerate(test_scenarios):
-            if st.button(f"Test: {scenario['name']}", key=f"test_{i}"):
-                st.session_state.messages.append({"role": "user", "content": scenario['query']})
-                st.session_state.chat_history.append(HumanMessage(content=scenario['query']))
-                st.session_state.test_mode = scenario
-                st.rerun()
-        
         # Clear chat
         if st.button("🗑️ Clear Chat History"):
             st.session_state.messages = []
             st.session_state.chat_history = []
-            st.session_state.test_mode = None
-            st.rerun()
-            
-        # Force refresh app (useful if class definition changed)
-        if st.button("🔄 Refresh App"):
-            if 'chat_app' in st.session_state:
-                del st.session_state.chat_app
             st.rerun()
 
     # Initialize session state
@@ -392,70 +296,11 @@ def main():
         st.session_state.messages = []
     if "chat_history" not in st.session_state:
         st.session_state.chat_history = []
-    if "chat_app" not in st.session_state or not hasattr(st.session_state.chat_app, 'set_debug_mode'):
-        # Create new ChatApp instance if it doesn't exist or is missing methods
+    if "chat_app" not in st.session_state:
         st.session_state.chat_app = ChatApp()
         st.session_state.chat_app.initialize_tools(
             pinecone_api_key, assistant_name, openai_api_key, tavily_api_key
         )
-    if "test_mode" not in st.session_state:
-        st.session_state.test_mode = None
-    if "run_tests" not in st.session_state:
-        st.session_state.run_tests = False
-
-    # Set debug mode safely
-    if hasattr(st.session_state.chat_app, 'set_debug_mode'):
-        st.session_state.chat_app.set_debug_mode(debug_mode)
-    else:
-        # Fallback: set debug_mode directly
-        st.session_state.chat_app.debug_mode = debug_mode
-
-    # Run all tests if requested
-    if st.session_state.run_tests:
-        st.header("🧪 Running Fallback Tests")
-        test_scenarios = create_test_scenarios()
-        
-        for scenario in test_scenarios:
-            with st.expander(f"Test: {scenario['name']}", expanded=True):
-                st.write(f"**Query:** {scenario['query']}")
-                st.write(f"**Expected:** {'Fallback to Tavily' if scenario['expected_fallback'] else 'Use Pinecone'}")
-                st.write(f"**Description:** {scenario['description']}")
-                
-                # Create test message
-                test_history = [HumanMessage(content=scenario['query'])]
-                
-                # Get response
-                response = st.session_state.chat_app.get_response(test_history)
-                
-                # Analyze results
-                debug_info = response.get('debug_info', {})
-                fallback_triggered = debug_info.get('fallback_triggered', False)
-                tavily_used = debug_info.get('tavily_used', False)
-                
-                # Display results
-                st.write("**Actual Results:**")
-                if tavily_used:
-                    st.success("✅ Used Tavily (Web Search)")
-                elif not fallback_triggered:
-                    st.info("ℹ️ Used Pinecone (No fallback)")
-                else:
-                    st.warning("⚠️ Fallback triggered but Tavily not available")
-                
-                if debug_info.get('fallback_reason'):
-                    st.write(f"**Fallback Reason:** {debug_info['fallback_reason']}")
-                
-                # Test result
-                test_passed = (scenario['expected_fallback'] and tavily_used) or (not scenario['expected_fallback'] and not tavily_used)
-                if test_passed:
-                    st.success("✅ Test PASSED")
-                else:
-                    st.error("❌ Test FAILED")
-                
-                st.write("**Response:**")
-                st.write(response['content'][:200] + "..." if len(response['content']) > 200 else response['content'])
-                st.divider()
-        
-        st.session_state.run_tests = False
 
     # Display chat messages
     for message in st.session_state.messages:
@@ -487,31 +332,6 @@ def main():
             st.markdown(response["content"], unsafe_allow_html=True)
             st.caption(f"Source: {response['source']}")
             
-            # Display test analysis if in test mode
-            if st.session_state.test_mode:
-                with st.expander("🧪 Test Analysis", expanded=True):
-                    scenario = st.session_state.test_mode
-                    debug_info = response.get('debug_info', {})
-                    
-                    st.write(f"**Test:** {scenario['name']}")
-                    st.write(f"**Expected Fallback:** {scenario['expected_fallback']}")
-                    st.write(f"**Actual Fallback:** {debug_info.get('fallback_triggered', False)}")
-                    st.write(f"**Tavily Used:** {debug_info.get('tavily_used', False)}")
-                    
-                    if debug_info.get('fallback_reason'):
-                        st.write(f"**Fallback Reason:** {debug_info['fallback_reason']}")
-                    
-                    # Test result
-                    tavily_used = debug_info.get('tavily_used', False)
-                    test_passed = (scenario['expected_fallback'] and tavily_used) or (not scenario['expected_fallback'] and not tavily_used)
-                    
-                    if test_passed:
-                        st.success("✅ Test PASSED")
-                    else:
-                        st.error("❌ Test FAILED - Fallback logic may need adjustment")
-                
-                st.session_state.test_mode = None
-            
             # Save assistant message
             st.session_state.messages.append({
                 "role": "assistant", 
@@ -520,26 +340,17 @@ def main():
             })
             st.session_state.chat_history.append(AIMessage(content=response["content"]))
 
-    # Display helpful information
+    # Display helpful information for new users
     if not st.session_state.messages:
         st.info("""
-        👋 **Welcome to the Enhanced FiFi Chat Assistant!**
+        👋 **Welcome to FiFi AI Chat Assistant!**
         
-        **New Features:**
-        - 🐛 **Debug Mode**: See detailed information about why fallback decisions are made
-        - 🧪 **Test Scenarios**: Built-in tests to verify fallback functionality
-        - 📊 **Response Analysis**: Understand what triggers the Pinecone → Tavily switch
+        **How it works:**
+        - 🔍 **First**: Searches your internal knowledge base via Pinecone
+        - 🌐 **Fallback**: Automatically switches to web search when needed
+        - 🎯 **Smart Detection**: Knows when to use which source for the best answers
         
-        **How to test the fallback:**
-        1. Enable Debug Mode in the sidebar
-        2. Use the test scenarios or ask questions your Pinecone assistant doesn't know
-        3. Watch the debug information to see the decision process
-        
-        **Common fallback triggers:**
-        - Responses without citations
-        - Short responses (< 100 characters)
-        - Phrases like "I don't know", "not available", etc.
-        - Generic responses without specific information
+        Just ask any question and FiFi will find the best way to answer it!
         """)
 
 if __name__ == "__main__":
