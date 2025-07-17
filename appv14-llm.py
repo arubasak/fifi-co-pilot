@@ -1,5 +1,6 @@
 import streamlit as st
 import os
+import re
 from typing import List, Dict, Any
 from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
 from langchain_tavily import TavilySearch
@@ -118,68 +119,90 @@ class TavilyFallbackAgent:
     def __init__(self, tavily_api_key: str):
         self.tavily_tool = TavilySearch(max_results=5, api_key=tavily_api_key)
 
-    def _add_utm_to_links(self, url: str) -> str:
-        """Add UTM parameters to a URL."""
-        utm_params = "utm_source=12taste.com&utm_medium=fifi-chat"
-        if '?' in url:
-            return f"{url}&{utm_params}"
-        else:
-            return f"{url}?{utm_params}"
+    def _add_utm_to_links(self, content: str) -> str:
+        """
+        Finds all Markdown links in a string and appends the UTM parameters.
+        """
+        def replacer(match):
+            url = match.group(1)
+            utm_params = "utm_source=12taste.com&utm_medium=fifi-chat"
+            if '?' in url:
+                new_url = f"{url}&{utm_params}"
+            else:
+                new_url = f"{url}?{utm_params}"
+            return f"({new_url})"
+        return re.sub(r'(?<=\])\(([^)]+)\)', replacer, content)
 
-    def _format_search_results(self, results) -> str:
-        """Format Tavily search results into a readable response."""
-        
-        # Handle case where Tavily returns a string summary
+    def _synthesize_search_results(self, results, query: str) -> str:
+        """
+        Synthesize search results into a coherent response similar to LLM output.
+        """
         if isinstance(results, str):
-            return f"Here's what I found from web search:\n\n{results}"
+            # If Tavily returns a string summary, use it directly
+            return results
         
-        # Handle case where results is a list of dictionaries
-        if isinstance(results, list) and results:
-            response_parts = []
-            response_parts.append("Here's what I found from web search:\n")
-            
-            for i, result in enumerate(results, 1):
-                if isinstance(result, dict):
-                    title = result.get('title', 'No title')
-                    content = result.get('content', result.get('snippet', result.get('description', 'No description available')))
-                    url = result.get('url', '')
-                    
-                    # Limit content length for readability
-                    if len(content) > 200:
-                        content = content[:200] + "..."
-                    
-                    # Add UTM parameters to URL
+        if not results or not isinstance(results, list):
+            return "I couldn't find any relevant information for your query."
+        
+        # Extract key information from search results
+        relevant_info = []
+        sources = []
+        
+        for i, result in enumerate(results[:3], 1):  # Use top 3 results
+            if isinstance(result, dict):
+                title = result.get('title', '')
+                content = result.get('content', result.get('snippet', ''))
+                url = result.get('url', '')
+                
+                if content:
+                    relevant_info.append(content)
                     if url:
-                        url_with_utm = self._add_utm_to_links(url)
-                        response_parts.append(f"**{i}. {title}**")
-                        response_parts.append(f"{content}")
-                        response_parts.append(f"🔗 [Read more]({url_with_utm})\n")
-                    else:
-                        response_parts.append(f"**{i}. {title}**")
-                        response_parts.append(f"{content}\n")
-            
-            return "\n".join(response_parts)
+                        sources.append(f"[{title}]({url})")
         
-        # Fallback for empty or unexpected results
-        return "I couldn't find any relevant information for your query."
+        if not relevant_info:
+            return "I couldn't find relevant information for your query."
+        
+        # Create a synthesized response
+        response_parts = []
+        
+        # Combine the information in a natural way
+        if len(relevant_info) == 1:
+            response_parts.append(f"Based on my search, {relevant_info[0]}")
+        else:
+            response_parts.append("Based on my search:")
+            for info in relevant_info:
+                if len(info) > 300:
+                    info = info[:300] + "..."
+                response_parts.append(f"\n{info}")
+        
+        # Add sources section
+        if sources:
+            response_parts.append(f"\n\n**Sources:**")
+            for i, source in enumerate(sources, 1):
+                response_parts.append(f"{i}. {source}")
+        
+        return "".join(response_parts)
 
     def query(self, message: str, chat_history: List[BaseMessage]) -> Dict[str, Any]:
         try:
-            # Try to get results from Tavily
+            # Get search results from Tavily
             search_results = self.tavily_tool.invoke({"query": message})
             
-            # Format the results (handles both string and structured responses)
-            formatted_response = self._format_search_results(search_results)
+            # Synthesize results into a coherent response
+            synthesized_content = self._synthesize_search_results(search_results, message)
+            
+            # Apply UTM tracking to any links
+            final_content = self._add_utm_to_links(synthesized_content)
             
             return {
-                "content": formatted_response, 
-                "success": True, 
+                "content": final_content,
+                "success": True,
                 "source": "FiFi Web Search"
             }
         except Exception as e:
             return {
-                "content": f"I apologize, but an error occurred while searching: {str(e)}", 
-                "success": False, 
+                "content": f"I apologize, but an error occurred while searching: {str(e)}",
+                "success": False,
                 "source": "error"
             }
 
