@@ -33,6 +33,8 @@ class PineconeAssistantTool:
         try:
     def _initialize_assistant(self):
         try:
+    def _initialize_assistant(self):
+        try:
             # Extremely strict instructions to prevent hallucination and fake citations
             instructions = (
                 "You are a document-based AI assistant with STRICT limitations.\n\n"
@@ -49,6 +51,20 @@ class PineconeAssistantTool:
                 "10. NEVER reference images, files, or documents that were not actually uploaded to your knowledge base\n\n"
                 "REMEMBER: It is better to say 'I don't know' than to provide incorrect information, fake sources, or non-existent file references."
             )
+            
+            assistants_list = self.pc.assistant.list_assistants()
+            if self.assistant_name not in [a.name for a in assistants_list]:
+                st.warning(f"Assistant '{self.assistant_name}' not found. Creating...")
+                return self.pc.assistant.create_assistant(
+                    assistant_name=self.assistant_name, 
+                    instructions=instructions
+                )
+            else:
+                st.info(f"Connected to assistant: '{self.assistant_name}'")
+                return self.pc.assistant.Assistant(assistant_name=self.assistant_name)
+        except Exception as e:
+            st.error(f"Failed to initialize Pinecone Assistant: {e}")
+            return None
             
             assistants_list = self.pc.assistant.list_assistants()
             if self.assistant_name not in [a.name for a in assistants_list]:
