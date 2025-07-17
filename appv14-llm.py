@@ -139,46 +139,77 @@ class TavilyFallbackAgent:
 
     def synthesize_search_results(self, results, query: str) -> str:
         """Synthesize search results into a coherent response similar to LLM output."""
-        if isinstance(results, str):
-            return results
         
-        if not results or not isinstance(results, list):
+        # Debug: Show what Tavily actually returned
+        st.write("🔍 **Debug - Tavily Response Type:**", type(results))
+        st.write("🔍 **Debug - Tavily Response:**", str(results)[:500] + "..." if len(str(results)) > 500 else str(results))
+        
+        # Handle string response from Tavily
+        if isinstance(results, str):
+            return f"Based on my search: {results}"
+        
+        # Handle empty or invalid results
+        if not results:
             return "I couldn't find any relevant information for your query."
         
-        relevant_info = []
-        sources = []
-        
-        for i, result in enumerate(results[:3], 1):
-            if isinstance(result, dict):
-                title = result.get('title', '')
-                content = result.get('content', result.get('snippet', ''))
-                url = result.get('url', '')
+        # Handle list of results
+        if isinstance(results, list):
+            relevant_info = []
+            sources = []
+            
+            st.write(f"🔍 **Debug - Found {len(results)} results**")
+            
+            for i, result in enumerate(results[:5], 1):  # Use top 5 results
+                st.write(f"🔍 **Debug - Result {i}:**", type(result), str(result)[:200] + "..." if len(str(result)) > 200 else str(result))
                 
-                if content:
-                    relevant_info.append(content)
-                    if url:
-                        sources.append(f"[{title}]({url})")
+                if isinstance(result, dict):
+                    # Try multiple possible field names for content
+                    title = result.get('title', result.get('name', f'Result {i}'))
+                    content = (result.get('content') or 
+                             result.get('snippet') or 
+                             result.get('description') or 
+                             result.get('summary') or 
+                             result.get('text') or 
+                             result.get('body', ''))
+                    url = result.get('url', result.get('link', ''))
+                    
+                    st.write(f"   - Title: {title}")
+                    st.write(f"   - Content: {content[:100]}..." if content else "No content")
+                    st.write(f"   - URL: {url}")
+                    
+                    if content:
+                        relevant_info.append(content)
+                        if url and title:
+                            sources.append(f"[{title}]({url})")
+                elif isinstance(result, str):
+                    # If result is just a string
+                    relevant_info.append(result)
+            
+            if not relevant_info:
+                return "I found search results but couldn't extract readable content. Please try rephrasing your query."
+            
+            # Build response
+            response_parts = []
+            
+            if len(relevant_info) == 1:
+                response_parts.append(f"Based on my search: {relevant_info[0]}")
+            else:
+                response_parts.append("Based on my search, here's what I found:")
+                for i, info in enumerate(relevant_info[:3], 1):
+                    if len(info) > 300:
+                        info = info[:300] + "..."
+                    response_parts.append(f"\n\n**{i}.** {info}")
+            
+            # Add sources if available
+            if sources:
+                response_parts.append(f"\n\n**Sources:**")
+                for i, source in enumerate(sources, 1):
+                    response_parts.append(f"\n{i}. {source}")
+            
+            return "".join(response_parts)
         
-        if not relevant_info:
-            return "I couldn't find relevant information for your query."
-        
-        response_parts = []
-        
-        if len(relevant_info) == 1:
-            response_parts.append(f"Based on my search, {relevant_info[0]}")
-        else:
-            response_parts.append("Based on my search:")
-            for info in relevant_info:
-                if len(info) > 300:
-                    info = info[:300] + "..."
-                response_parts.append(f"\n{info}")
-        
-        if sources:
-            response_parts.append(f"\n\n**Sources:**")
-            for i, source in enumerate(sources, 1):
-                response_parts.append(f"{i}. {source}")
-        
-        return "".join(response_parts)
+        # Handle other formats
+        return f"Found search results but in unexpected format: {type(results)}. Raw results: {str(results)[:200]}..."
 
     def query(self, message: str, chat_history: List[BaseMessage]) -> Dict[str, Any]:
         try:
