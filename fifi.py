@@ -180,6 +180,7 @@ class ChatApp:
         self.debug_mode = False
         
     def set_debug_mode(self, debug: bool):
+        """Enable or disable debug mode for detailed fallback analysis."""
         self.debug_mode = debug
         
     def initialize_tools(self, pinecone_api_key: str, assistant_name: str,
@@ -379,13 +380,20 @@ def main():
             st.session_state.chat_history = []
             st.session_state.test_mode = None
             st.rerun()
+            
+        # Force refresh app (useful if class definition changed)
+        if st.button("🔄 Refresh App"):
+            if 'chat_app' in st.session_state:
+                del st.session_state.chat_app
+            st.rerun()
 
     # Initialize session state
     if "messages" not in st.session_state:
         st.session_state.messages = []
     if "chat_history" not in st.session_state:
         st.session_state.chat_history = []
-    if "chat_app" not in st.session_state:
+    if "chat_app" not in st.session_state or not hasattr(st.session_state.chat_app, 'set_debug_mode'):
+        # Create new ChatApp instance if it doesn't exist or is missing methods
         st.session_state.chat_app = ChatApp()
         st.session_state.chat_app.initialize_tools(
             pinecone_api_key, assistant_name, openai_api_key, tavily_api_key
@@ -395,8 +403,12 @@ def main():
     if "run_tests" not in st.session_state:
         st.session_state.run_tests = False
 
-    # Set debug mode
-    st.session_state.chat_app.set_debug_mode(debug_mode)
+    # Set debug mode safely
+    if hasattr(st.session_state.chat_app, 'set_debug_mode'):
+        st.session_state.chat_app.set_debug_mode(debug_mode)
+    else:
+        # Fallback: set debug_mode directly
+        st.session_state.chat_app.debug_mode = debug_mode
 
     # Run all tests if requested
     if st.session_state.run_tests:
