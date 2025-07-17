@@ -126,41 +126,49 @@ class TavilyFallbackAgent:
         else:
             return f"{url}?{utm_params}"
 
-    def _format_search_results(self, results: List[Dict]) -> str:
-        """Format raw Tavily search results into a readable response."""
-        if not results:
-            return "I couldn't find any relevant information for your query."
+    def _format_search_results(self, results) -> str:
+        """Format Tavily search results into a readable response."""
         
-        response_parts = []
-        response_parts.append("Here's what I found from web search:\n")
+        # Handle case where Tavily returns a string summary
+        if isinstance(results, str):
+            return f"Here's what I found from web search:\n\n{results}"
         
-        for i, result in enumerate(results, 1):
-            title = result.get('title', 'No title')
-            content = result.get('content', result.get('snippet', 'No description available'))
-            url = result.get('url', '')
+        # Handle case where results is a list of dictionaries
+        if isinstance(results, list) and results:
+            response_parts = []
+            response_parts.append("Here's what I found from web search:\n")
             
-            # Limit content length for readability
-            if len(content) > 200:
-                content = content[:200] + "..."
+            for i, result in enumerate(results, 1):
+                if isinstance(result, dict):
+                    title = result.get('title', 'No title')
+                    content = result.get('content', result.get('snippet', result.get('description', 'No description available')))
+                    url = result.get('url', '')
+                    
+                    # Limit content length for readability
+                    if len(content) > 200:
+                        content = content[:200] + "..."
+                    
+                    # Add UTM parameters to URL
+                    if url:
+                        url_with_utm = self._add_utm_to_links(url)
+                        response_parts.append(f"**{i}. {title}**")
+                        response_parts.append(f"{content}")
+                        response_parts.append(f"🔗 [Read more]({url_with_utm})\n")
+                    else:
+                        response_parts.append(f"**{i}. {title}**")
+                        response_parts.append(f"{content}\n")
             
-            # Add UTM parameters to URL
-            if url:
-                url_with_utm = self._add_utm_to_links(url)
-                response_parts.append(f"**{i}. {title}**")
-                response_parts.append(f"{content}")
-                response_parts.append(f"🔗 [Read more]({url_with_utm})\n")
-            else:
-                response_parts.append(f"**{i}. {title}**")
-                response_parts.append(f"{content}\n")
+            return "\n".join(response_parts)
         
-        return "\n".join(response_parts)
+        # Fallback for empty or unexpected results
+        return "I couldn't find any relevant information for your query."
 
     def query(self, message: str, chat_history: List[BaseMessage]) -> Dict[str, Any]:
         try:
-            # Use Tavily search directly
+            # Try to get results from Tavily
             search_results = self.tavily_tool.invoke({"query": message})
             
-            # Format the raw results
+            # Format the results (handles both string and structured responses)
             formatted_response = self._format_search_results(search_results)
             
             return {
@@ -170,7 +178,7 @@ class TavilyFallbackAgent:
             }
         except Exception as e:
             return {
-                "content": f"I apologize, but an error occurred while searching: {e}", 
+                "content": f"I apologize, but an error occurred while searching: {str(e)}", 
                 "success": False, 
                 "source": "error"
             }
