@@ -25,17 +25,10 @@ class PineconeAssistantTool:
             raise ImportError("Pinecone client not available.")
         self.pc = Pinecone(api_key=api_key)
         self.assistant_name = assistant_name
-        self.assistant = self._initialize_assistant()
+        self.assistant = self.initialize_assistant()
 
-    def _initialize_assistant(self):
+    def initialize_assistant(self):
         try:
-    def _initialize_assistant(self):
-        try:
-    def _initialize_assistant(self):
-        try:
-    def _initialize_assistant(self):
-        try:
-            # Extremely strict instructions to prevent hallucination and fake citations
             instructions = (
                 "You are a document-based AI assistant with STRICT limitations.\n\n"
                 "ABSOLUTE RULES - NO EXCEPTIONS:\n"
@@ -51,20 +44,6 @@ class PineconeAssistantTool:
                 "10. NEVER reference images, files, or documents that were not actually uploaded to your knowledge base\n\n"
                 "REMEMBER: It is better to say 'I don't know' than to provide incorrect information, fake sources, or non-existent file references."
             )
-            
-            assistants_list = self.pc.assistant.list_assistants()
-            if self.assistant_name not in [a.name for a in assistants_list]:
-                st.warning(f"Assistant '{self.assistant_name}' not found. Creating...")
-                return self.pc.assistant.create_assistant(
-                    assistant_name=self.assistant_name, 
-                    instructions=instructions
-                )
-            else:
-                st.info(f"Connected to assistant: '{self.assistant_name}'")
-                return self.pc.assistant.Assistant(assistant_name=self.assistant_name)
-        except Exception as e:
-            st.error(f"Failed to initialize Pinecone Assistant: {e}")
-            return None
             
             assistants_list = self.pc.assistant.list_assistants()
             if self.assistant_name not in [a.name for a in assistants_list]:
@@ -146,10 +125,8 @@ class TavilyFallbackAgent:
     def __init__(self, tavily_api_key: str):
         self.tavily_tool = TavilySearch(max_results=5, api_key=tavily_api_key)
 
-    def _add_utm_to_links(self, content: str) -> str:
-        """
-        Finds all Markdown links in a string and appends the UTM parameters.
-        """
+    def add_utm_to_links(self, content: str) -> str:
+        """Finds all Markdown links in a string and appends the UTM parameters."""
         def replacer(match):
             url = match.group(1)
             utm_params = "utm_source=12taste.com&utm_medium=fifi-chat"
@@ -160,22 +137,18 @@ class TavilyFallbackAgent:
             return f"({new_url})"
         return re.sub(r'(?<=\])\(([^)]+)\)', replacer, content)
 
-    def _synthesize_search_results(self, results, query: str) -> str:
-        """
-        Synthesize search results into a coherent response similar to LLM output.
-        """
+    def synthesize_search_results(self, results, query: str) -> str:
+        """Synthesize search results into a coherent response similar to LLM output."""
         if isinstance(results, str):
-            # If Tavily returns a string summary, use it directly
             return results
         
         if not results or not isinstance(results, list):
             return "I couldn't find any relevant information for your query."
         
-        # Extract key information from search results
         relevant_info = []
         sources = []
         
-        for i, result in enumerate(results[:3], 1):  # Use top 3 results
+        for i, result in enumerate(results[:3], 1):
             if isinstance(result, dict):
                 title = result.get('title', '')
                 content = result.get('content', result.get('snippet', ''))
@@ -189,10 +162,8 @@ class TavilyFallbackAgent:
         if not relevant_info:
             return "I couldn't find relevant information for your query."
         
-        # Create a synthesized response
         response_parts = []
         
-        # Combine the information in a natural way
         if len(relevant_info) == 1:
             response_parts.append(f"Based on my search, {relevant_info[0]}")
         else:
@@ -202,7 +173,6 @@ class TavilyFallbackAgent:
                     info = info[:300] + "..."
                 response_parts.append(f"\n{info}")
         
-        # Add sources section
         if sources:
             response_parts.append(f"\n\n**Sources:**")
             for i, source in enumerate(sources, 1):
@@ -212,14 +182,9 @@ class TavilyFallbackAgent:
 
     def query(self, message: str, chat_history: List[BaseMessage]) -> Dict[str, Any]:
         try:
-            # Get search results from Tavily
             search_results = self.tavily_tool.invoke({"query": message})
-            
-            # Synthesize results into a coherent response
-            synthesized_content = self._synthesize_search_results(search_results, message)
-            
-            # Apply UTM tracking to any links
-            final_content = self._add_utm_to_links(synthesized_content)
+            synthesized_content = self.synthesize_search_results(search_results, message)
+            final_content = self.add_utm_to_links(synthesized_content)
             
             return {
                 "content": final_content,
@@ -244,48 +209,80 @@ class ChatApp:
         if tavily_api_key:
             self.tavily_agent = TavilyFallbackAgent(tavily_api_key)
 
-    def _should_use_web_fallback(self, pinecone_response: Dict[str, Any]) -> bool:
-        """Aggressive fallback detection to prevent hallucination."""
+    def should_use_web_fallback(self, pinecone_response: Dict[str, Any]) -> bool:
+        """EXTREMELY aggressive fallback detection to prevent any hallucination."""
         content = pinecone_response.get("content", "").lower()
+        content_raw = pinecone_response.get("content", "")
         
-        # First priority: Explicit "don't know" statements
+        # PRIORITY 1: Always fallback for current/recent information requests
+        current_info_indicators = [
+            "today", "yesterday", "this week", "this month", "this year", "2025", "2024",
+            "current", "latest", "recent", "now", "currently", "updated",
+            "news", "weather", "stock", "price", "event", "happening"
+        ]
+        if any(indicator in content for indicator in current_info_indicators):
+            return True
+        
+        # PRIORITY 2: Explicit "don't know" statements (allow these to pass)
         explicit_unknown = [
             "i don't have specific information", "i don't know", "i'm not sure",
             "i cannot help", "i cannot provide", "cannot find specific information",
             "no specific information", "no information about", "don't have information",
-            "i don't have access", "do not have access", "information is not available",
             "not available in my knowledge", "unable to find", "no data available",
-            "insufficient information", "limited information", "outside my knowledge",
-            "beyond my knowledge", "not familiar with", "cannot answer"
+            "insufficient information", "outside my knowledge", "cannot answer"
         ]
-        
         if any(keyword in content for keyword in explicit_unknown):
             return True
         
-        # Second priority: No citations = likely hallucination or generic response
-        # If there are no citations, it's probably not from documents
-        has_citations = pinecone_response.get("has_citations", False)
-        content_raw = pinecone_response.get("content", "")
-        
-        if not has_citations and "[1]" not in content_raw and "**Sources:**" not in content_raw:
-            # Exception: Only allow very short acknowledgments without citations
-            if len(content_raw.strip()) > 50:  # Anything longer should have citations
-                return True
-        
-        # Third priority: Responses that seem to be general knowledge (red flags)
-        general_knowledge_indicators = [
-            "generally", "typically", "usually", "commonly", "often",
-            "in general", "as a rule", "most people", "many people",
-            "it is known that", "it is widely", "according to common knowledge",
-            "based on general information", "from what i understand"
+        # PRIORITY 3: Detect fake files/images/paths (CRITICAL SAFETY)
+        fake_file_patterns = [
+            ".jpg", ".jpeg", ".png", ".gif", ".pdf", ".doc", ".docx",
+            ".xls", ".xlsx", ".ppt", ".pptx", ".mp4", ".avi", ".mp3",
+            "/uploads/", "/files/", "/images/", "/documents/", "/media/",
+            "file://", "ftp://", "path:", "directory:", "folder:"
         ]
         
-        general_count = sum(1 for indicator in general_knowledge_indicators if indicator in content)
-        if general_count >= 2:  # Multiple general knowledge indicators
+        has_real_citations = pinecone_response.get("has_citations", False)
+        if any(pattern in content_raw for pattern in fake_file_patterns):
+            if not has_real_citations:
+                return True
+        
+        # PRIORITY 4: Detect potential fake citations (CRITICAL)
+        if "[1]" in content_raw or "**Sources:**" in content_raw:
+            suspicious_patterns = [
+                "http://", "https://", ".com", ".org", ".net", "www.",
+                "example.com", "website.com", "source.com", "domain.com"
+            ]
+            if not has_real_citations and any(pattern in content_raw for pattern in suspicious_patterns):
+                return True
+        
+        # PRIORITY 5: NO CITATIONS = MANDATORY FALLBACK (unless very short)
+        if not has_real_citations:
+            if "[1]" not in content_raw and "**Sources:**" not in content_raw:
+                if len(content_raw.strip()) > 30:
+                    return True
+        
+        # PRIORITY 6: General knowledge indicators (likely hallucination)
+        general_knowledge_red_flags = [
+            "generally", "typically", "usually", "commonly", "often", "most",
+            "according to", "it is known", "studies show", "research indicates",
+            "experts say", "based on", "in general", "as a rule"
+        ]
+        if any(flag in content for flag in general_knowledge_red_flags):
             return True
         
-        # Fourth priority: Very short responses (likely insufficient)
-        if pinecone_response.get("response_length", 0) < 80:
+        # PRIORITY 7: Question-answering patterns that suggest general knowledge
+        qa_patterns = [
+            "the answer is", "this is because", "the reason", "due to the fact",
+            "this happens when", "the cause of", "this occurs"
+        ]
+        if any(pattern in content for pattern in qa_patterns):
+            if not pinecone_response.get("has_citations", False):
+                return True
+        
+        # PRIORITY 8: Response length suggests substantial answer without sources
+        response_length = pinecone_response.get("response_length", 0)
+        if response_length > 100 and not pinecone_response.get("has_citations", False):
             return True
         
         return False
@@ -296,7 +293,7 @@ class ChatApp:
                 pinecone_response = self.pinecone_tool.query(chat_history)
                 
                 if pinecone_response and pinecone_response.get("success"):
-                    should_fallback = self._should_use_web_fallback(pinecone_response)
+                    should_fallback = self.should_use_web_fallback(pinecone_response)
                     
                     if not should_fallback:
                         return pinecone_response
@@ -318,12 +315,10 @@ def main():
     st.title("🤖 FiFi AI Chat Assistant")
     st.markdown("**Powered by FiFi with Smart Fallback**")
     
-    # Sidebar configuration
     with st.sidebar:
         st.header("⚙️ Configuration")
         st.info("API Keys are loaded from environment variables.", icon="🔐")
         
-        # API Keys
         pinecone_api_key = os.getenv("PINECONE_API_KEY")
         tavily_api_key = os.getenv("TAVILY_API_KEY")
         assistant_name = st.text_input(
@@ -331,20 +326,17 @@ def main():
             value=os.getenv("PINECONE_ASSISTANT_NAME", "my-chat-assistant")
         )
         
-        # Tool status
         st.subheader("🔧 Tool Status")
         pinecone_status = "✅ Ready" if PINECONE_AVAILABLE and pinecone_api_key and assistant_name else "❌ Not configured"
         tavily_status = "✅ Ready" if tavily_api_key else "❌ Not configured"
         st.write(f"**FiFi Assistant:** {pinecone_status}")
         st.write(f"**FiFi Web Search:** {tavily_status}")
         
-        # Clear chat
         if st.button("🗑️ Clear Chat History"):
             st.session_state.messages = []
             st.session_state.chat_history = []
             st.rerun()
 
-    # Initialize session state
     if "messages" not in st.session_state:
         st.session_state.messages = []
     if "chat_history" not in st.session_state:
@@ -355,37 +347,29 @@ def main():
             pinecone_api_key, assistant_name, tavily_api_key
         )
 
-    # Display chat messages
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"], unsafe_allow_html=True)
             if "source" in message:
                 st.caption(f"Source: {message['source']}")
 
-    # Chat input
     if prompt := st.chat_input("Ask me anything..."):
-        # Check if tools are configured
         if not (pinecone_api_key and assistant_name) and not tavily_api_key:
             st.error("Please configure API keys in your environment variables.")
             return
 
-        # Add user message
         st.session_state.messages.append({"role": "user", "content": prompt})
         st.session_state.chat_history.append(HumanMessage(content=prompt))
         
-        # Display user message
         with st.chat_message("user"):
             st.markdown(prompt)
         
-        # Get and display assistant response
         with st.chat_message("assistant"):
             response = st.session_state.chat_app.get_response(st.session_state.chat_history)
             
-            # Display response
             st.markdown(response["content"], unsafe_allow_html=True)
             st.caption(f"Source: {response['source']}")
             
-            # Save assistant message
             st.session_state.messages.append({
                 "role": "assistant", 
                 "content": response["content"], 
@@ -393,7 +377,6 @@ def main():
             })
             st.session_state.chat_history.append(AIMessage(content=response["content"]))
 
-    # Display helpful information for new users
     if not st.session_state.messages:
         st.info("""
         👋 **Welcome to FiFi AI Chat Assistant!**
