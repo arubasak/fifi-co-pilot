@@ -295,7 +295,7 @@ class ChatApp:
         
         # PRIORITY 3: Detect fake files/images/paths (CRITICAL SAFETY)
         fake_file_patterns = [
-            ".jpg", ".jpeg", ".png", ".gif", ".pdf", ".doc", ".docx",
+            ".jpg", ".jpeg", ".png", ".gif", ".doc", ".docx",
             ".xls", ".xlsx", ".ppt", ".pptx", ".mp4", ".avi", ".mp3",
             "/uploads/", "/files/", "/images/", "/documents/", "/media/",
             "file://", "ftp://", "path:", "directory:", "folder:"
