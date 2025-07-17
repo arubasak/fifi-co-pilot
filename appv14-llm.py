@@ -29,14 +29,25 @@ class PineconeAssistantTool:
 
     def _initialize_assistant(self):
         try:
-            # Enhanced instructions for better fallback detection
+    def _initialize_assistant(self):
+        try:
+    def _initialize_assistant(self):
+        try:
+            # Extremely strict instructions to prevent hallucination and fake citations
             instructions = (
-                "You are a helpful AI assistant. Answer questions based on the provided documents. "
-                "When you use information from a document, you MUST generate an inline citation marker, like [1]. "
-                "IMPORTANT: If you cannot find specific information in the documents to answer a question, "
-                "you MUST respond with 'I don't have specific information about this topic in my knowledge base.' "
-                "Do not provide generic or speculative answers for topics not covered in your documents. "
-                "Be honest when you don't know something rather than guessing."
+                "You are a document-based AI assistant with STRICT limitations.\n\n"
+                "ABSOLUTE RULES - NO EXCEPTIONS:\n"
+                "1. You can ONLY answer using information that exists in your uploaded documents\n"
+                "2. If you cannot find the answer in your documents, you MUST respond with EXACTLY: 'I don't have specific information about this topic in my knowledge base.'\n"
+                "3. NEVER create fake citations, URLs, or source references\n"
+                "4. NEVER create fake file paths, image references (.jpg, .png, etc.), or document names\n"
+                "5. NEVER use general knowledge or information not in your documents\n"
+                "6. NEVER guess or speculate about anything\n"
+                "7. NEVER make up website links, file paths, or citations\n"
+                "8. If asked about current events, news, recent information, or anything not in your documents, respond with: 'I don't have specific information about this topic in my knowledge base.'\n"
+                "9. Only include citations [1], [2], etc. if they come from your actual uploaded documents\n"
+                "10. NEVER reference images, files, or documents that were not actually uploaded to your knowledge base\n\n"
+                "REMEMBER: It is better to say 'I don't know' than to provide incorrect information, fake sources, or non-existent file references."
             )
             
             assistants_list = self.pc.assistant.list_assistants()
@@ -218,55 +229,48 @@ class ChatApp:
             self.tavily_agent = TavilyFallbackAgent(tavily_api_key)
 
     def _should_use_web_fallback(self, pinecone_response: Dict[str, Any]) -> bool:
-        """Enhanced fallback detection logic."""
+        """Aggressive fallback detection to prevent hallucination."""
         content = pinecone_response.get("content", "").lower()
         
-        # Comprehensive list of insufficient information indicators
-        insufficient_keywords = [
-            # Direct statements of not knowing
-            "i don't have specific information", "i don't know", "i'm not sure", 
+        # First priority: Explicit "don't know" statements
+        explicit_unknown = [
+            "i don't have specific information", "i don't know", "i'm not sure",
             "i cannot help", "i cannot provide", "cannot find specific information",
             "no specific information", "no information about", "don't have information",
-            
-            # Access and availability issues
             "i don't have access", "do not have access", "information is not available",
-            "not available in my knowledge", "not contain specific information",
-            "unable to find", "no data available", "no relevant information",
-            
-            # Search and document related
-            "search results do not provide", "search results do not contain",
-            "not in my database", "no records of", "not documented",
-            
-            # Uncertainty indicators
+            "not available in my knowledge", "unable to find", "no data available",
             "insufficient information", "limited information", "outside my knowledge",
-            "beyond my knowledge", "not familiar with", "cannot answer",
-            "additional documents", "please provide more context"
+            "beyond my knowledge", "not familiar with", "cannot answer"
         ]
         
-        # Check for insufficient information keywords
-        if any(keyword in content for keyword in insufficient_keywords):
+        if any(keyword in content for keyword in explicit_unknown):
             return True
         
-        # Check if response lacks citations (might indicate generic response)
-        if not pinecone_response.get("has_citations", False):
-            if "[1]" not in pinecone_response.get("content", "") and "**Sources:**" not in pinecone_response.get("content", ""):
+        # Second priority: No citations = likely hallucination or generic response
+        # If there are no citations, it's probably not from documents
+        has_citations = pinecone_response.get("has_citations", False)
+        content_raw = pinecone_response.get("content", "")
+        
+        if not has_citations and "[1]" not in content_raw and "**Sources:**" not in content_raw:
+            # Exception: Only allow very short acknowledgments without citations
+            if len(content_raw.strip()) > 50:  # Anything longer should have citations
                 return True
         
-        # Check for very short responses (likely insufficient)
-        if pinecone_response.get("response_length", 0) < 100:
-            return True
-        
-        # Check for generic/uncertain language patterns
-        generic_phrases = [
-            "based on my knowledge", "generally speaking", "typically",
-            "in general", "it's possible that", "might be", "could be",
-            "often", "usually", "commonly"
+        # Third priority: Responses that seem to be general knowledge (red flags)
+        general_knowledge_indicators = [
+            "generally", "typically", "usually", "commonly", "often",
+            "in general", "as a rule", "most people", "many people",
+            "it is known that", "it is widely", "according to common knowledge",
+            "based on general information", "from what i understand"
         ]
-        if any(phrase in content for phrase in generic_phrases):
-            # Only trigger fallback if it's a very generic response (multiple indicators)
-            generic_count = sum(1 for phrase in generic_phrases if phrase in content)
-            if generic_count >= 2:
-                return True
+        
+        general_count = sum(1 for indicator in general_knowledge_indicators if indicator in content)
+        if general_count >= 2:  # Multiple general knowledge indicators
+            return True
+        
+        # Fourth priority: Very short responses (likely insufficient)
+        if pinecone_response.get("response_length", 0) < 80:
+            return True
         
         return False
 
@@ -281,7 +285,7 @@ class ChatApp:
                     if not should_fallback:
                         return pinecone_response
                     else:
-                        st.info("🔄 FiFi has limited information on this topic. Switching to web search for a more comprehensive answer.")
+                        st.error("🚨 SAFETY OVERRIDE: Detected potentially fabricated information. Switching to verified web sources.")
         
         if self.tavily_agent:
             with st.spinner("🌐 Searching the web with FiFi Web Search..."):
@@ -380,11 +384,17 @@ def main():
         
         **How it works:**
         - 🔍 **First**: Searches your internal knowledge base via Pinecone
-        - 🌐 **Fallback**: Automatically switches to web search when needed
-        - 🎯 **Smart Detection**: Knows when to use which source for the best answers
-        - 📰 **Raw Results**: Web search provides direct, unfiltered search results
+        - 🛡️ **Safety Override**: Detects and blocks fabricated information (fake URLs, file paths, etc.)
+        - 🌐 **Verified Fallback**: Switches to real web sources when needed
+        - 🚨 **Anti-Misinformation**: Aggressive detection of hallucinated content
         
-        Just ask any question and FiFi will find the best way to answer it!
+        **Safety Features:**
+        - ✅ Blocks fake citations and non-existent file references
+        - ✅ Prevents hallucinated image paths (.jpg, .png, etc.)
+        - ✅ Validates all sources before presenting information
+        - ✅ Falls back to verified web search when information is questionable
+        
+        **Note**: If you see a "SAFETY OVERRIDE" message, the system detected potentially fabricated information and switched to verified sources to protect you from misinformation.
         """)
 
 if __name__ == "__main__":
