@@ -309,7 +309,7 @@ class ChatApp:
         # PRIORITY 4: Detect potential fake citations (CRITICAL)
         if "[1]" in content_raw or "**Sources:**" in content_raw:
             suspicious_patterns = [
-                "http://", "https://", ".com", ".org", ".net", "www.",
+                "http://", ".org", ".net",
                 "example.com", "website.com", "source.com", "domain.com"
             ]
             if not has_real_citations and any(pattern in content_raw for pattern in suspicious_patterns):
